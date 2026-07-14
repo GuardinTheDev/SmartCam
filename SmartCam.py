@@ -1,20 +1,18 @@
+import os
 import time
 import json
 import random
 import requests
 
-# Gönderim yapılacak hedef sunucu adresi (İsteğe bağlı)
-# Eğer bir API'ye göndereceksen burayı aktifleştirip URL'i yazabilirsin.
-TARGET_URL = "http://127.0.0.1:8000/api/device/data"
+TARGET_URL = os.getenv("TARGET_URL", "http://127.0.0.1:8000/api/device/data")
 
 def generate_sensor_array(base_val, deviance, precision=3):
     """Belirlenen baz değer etrafında küçük sapmalarla 10 adetlik ölçüm dizisi üretir."""
     arr = [round(base_val + random.uniform(-deviance, deviance), precision) for _ in range(10)]
-    # Noktadan sonraki basamak sayısını korumak için string'e çevirip JSON listesi formatına sokuyoruz
     return arr
 
-def run_device_simulator(interval_seconds=5):
-    print("=== IoT Cihaz Simülasyonu Başlatıldı ===")
+def run_device_simulator(interval_seconds=20):
+    print(" IoT Cihaz Simülasyonu Başlatıldı ")
     
     # Sabit Cihaz Bilgileri
     device_info = {
@@ -102,7 +100,6 @@ def run_device_simulator(interval_seconds=5):
         print(f"\n[{time.strftime('%H:%M:%S')}] Yeni Veri Paketi Üretildi:")
         print(json.dumps(payload, indent=2, ensure_ascii=False))
 
-        # API'ye POST isteği gönder (Eğer URL tanımlandıysa)
         if TARGET_URL:
             try:
                 response = requests.post(TARGET_URL, json=payload, timeout=5)
@@ -114,5 +111,4 @@ def run_device_simulator(interval_seconds=5):
         time.sleep(interval_seconds)
 
 if __name__ == "__main__":
-    # Test için her 5 saniyede bir veri üretecek şekilde başlatıyoruz
-    run_device_simulator(interval_seconds=5)
+    run_device_simulator(interval_seconds=20)
