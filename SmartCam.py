@@ -11,7 +11,7 @@ def generate_sensor_array(base_val, deviance, precision=3):
     arr = [round(base_val + random.uniform(-deviance, deviance), precision) for _ in range(10)]
     return arr
 
-def run_device_simulator(interval_seconds=20):
+def run_device_simulator(interval_seconds=5):
     print(" IoT Cihaz Simülasyonu Başlatıldı ")
     
     # Sabit Cihaz Bilgileri
@@ -108,7 +108,7 @@ def run_device_simulator(interval_seconds=20):
                 print(f"-> Sunucuya gönderim başarısız: {e}")
 
         # Bir sonraki gönderim için bekle
-        time.sleep(interval_seconds)
+        time.sleep(interval_seconds)    
 
 if __name__ == "__main__":
-    run_device_simulator(interval_seconds=20)
+    run_device_simulator(interval_seconds=5)

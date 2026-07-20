@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  api:
+    build: .
+    container_name: smartcam_api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./sensor_data.db:/app/sensor_data.db
+    restart: always
+
+  simulator:
+    build: .
+    container_name: smartcam_simulator
+    depends_on:
+      - api
+    environment:
+      - TARGET_URL=http://api:8000/api/device/data
+    command: python SmartCam.py
+    restart: always
+
+  dashboard:
+    build: .
+    container_name: smartcam_dashboard
+    ports:
+      - "8501:8501"
+    depends_on:
+      - api
+    environment:
+      - API_URL=http://api:8000/api/device/history
+    command: streamlit run app.py --server.port=8501 --server.address=0.0.0.0
+    restart: always
