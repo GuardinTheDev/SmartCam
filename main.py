@@ -57,6 +57,13 @@ class UserApprovalRequest(BaseModel):
     user_id: int
     action: str  # 'approve' veya 'reject'
 
+class StationCreateRequest(BaseModel):
+    category_id: int
+    name: str
+    imei: str
+    phone_number: Optional[str] = ""
+    device_type: Optional[str] = "Gateway"
+
 
 # --- 1. CİHAZ PAKET ALMA ENDPOINT'İ ---
 @app.post("/api/device/data")
@@ -71,7 +78,6 @@ async def receive_device_data(payload: IoTDataPayload):
             detail="Yetkisiz veya Tanımsız İstasyon! Güvenlik kodu / IMEI eşleşmiyor."
         )
 
-    
     try:
         database.process_valid_payload(station["id"], payload.model_dump())
         return {
@@ -88,7 +94,6 @@ async def register_user(credentials: RegisterRequest):
     conn = database.get_db_connection()
     cursor = conn.cursor()
     try:
-        # Yeni kullanıcı 'pending' (onay bekliyor) durumunda kaydedilir
         cursor.execute(
             "INSERT INTO users (username, password, role, status) VALUES (?, ?, 'user', 'pending')", 
             (credentials.username, credentials.password)
@@ -192,6 +197,62 @@ async def get_sensor_history(station_id: int = 1, limit: int = 50):
     logs = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return logs
+
+
+# --- 8. YENİ İSTASYON VE VARSAYILAN SENSÖRLERİNİ EKLEME ---
+@app.post("/api/stations")
+async def create_station(station: StationCreateRequest):
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    # SYSTEM OTOMATİK OLARAK 128 KARAKTERLİK HASH KODUNU ÜRETİR
+    auto_security_code = database.generate_secure_token()
+    
+    try:
+        # 1. Yeni İstasyonu Kaydet (Otomatik Hash Kodu İle)
+        cursor.execute('''
+            INSERT INTO stations (category_id, name, security_code, imei, phone_number, device_type)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (
+            station.category_id, 
+            station.name, 
+            auto_security_code,
+            station.imei, 
+            station.phone_number, 
+            station.device_type
+        ))
+        
+        new_station_id = cursor.lastrowid
+        
+        # 2. İstasyona Varsayılan 0 Değerli Sensörleri Ekle
+        default_sensors = [
+            (new_station_id, 1, "Sıcaklık", 101, "temperature", "celsius", 0),
+            (new_station_id, 2, "Su Seviyesi", 102, "level", "cm", 0),
+            (new_station_id, 3, "Basınç / Debi", 103, "pressure", "bar", 0)
+        ]
+        
+        cursor.executemany('''
+            INSERT INTO sensors (station_id, sequence_number, label, channel_category_id, unit_type, default_unit, default_value)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', default_sensors)
+        
+        conn.commit()
+        conn.close()
+        
+        return {
+            "status": "success", 
+            "message": f"'{station.name}' istasyonu ve varsayılan sensörleri oluşturuldu.",
+            "station_id": new_station_id,
+            "generated_security_code": auto_security_code
+        }
+        
+    except sqlite3.IntegrityError:
+        conn.close()
+        raise HTTPException(
+            status_code=400, 
+            detail="Bu IMEI numarası zaten başka bir istasyonda kayıtlı!"
+        )
+
 
 if __name__ == "__main__":
     import uvicorn
