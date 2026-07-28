@@ -64,6 +64,16 @@ class StationCreateRequest(BaseModel):
     phone_number: Optional[str] = ""
     device_type: Optional[str] = "Gateway"
 
+class SensorCreateRequest(BaseModel):
+    station_id: int
+    label: str                                    
+    sequence_number: Optional[int] = None          
+    channel_category_id: Optional[int] = 100
+    unit_type: Optional[str] = "custom"
+    default_unit: Optional[str] = "unit"
+    default_value: Optional[float] = 0.0
+
+
 
 # --- 1. CİHAZ PAKET ALMA ENDPOINT'İ ---
 @app.post("/api/device/data")
@@ -253,7 +263,65 @@ async def create_station(station: StationCreateRequest):
             detail="Bu IMEI numarası zaten başka bir istasyonda kayıtlı!"
         )
 
+# --- 9. İSTASYONA YENİ SENSÖR EKLEME ---
+@app.post("/api/sensors")
+async def create_sensor(sensor: SensorCreateRequest):
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    # EĞER SIRA NUMARASI GİRİLMEMİŞSE OTOMATİK HESAPLA (MAX + 1)
+    seq_num = sensor.sequence_number
+    if not seq_num:
+        cursor.execute(
+            "SELECT COALESCE(MAX(sequence_number), 0) + 1 FROM sensors WHERE station_id = ?", 
+            (sensor.station_id,)
+        )
+        seq_num = cursor.fetchone()[0]
+        
+    try:
+        cursor.execute('''
+            INSERT INTO sensors (station_id, sequence_number, label, channel_category_id, unit_type, default_unit, default_value)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            sensor.station_id,
+            seq_num,  # Otomatik verilen veya kullanıcının girdiği sıra no
+            sensor.label,
+            sensor.channel_category_id,
+            sensor.unit_type,
+            sensor.default_unit,
+            sensor.default_value
+        ))
+        
+        new_sensor_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        
+        return {
+            "status": "success",
+            "message": f"'{sensor.label}' sensörü Sıra No: {seq_num} olarak otomatik eklendi.",
+            "sensor_id": new_sensor_id,
+            "assigned_sequence_number": seq_num
+        }
+    except Exception as e:
+        conn.close()
+        raise HTTPException(status_code=500, detail=f"Sensör ekleme hatası: {str(e)}")
+
+# --- 10. İSTASYONA AİT SENSÖRLERİ LİSTELEME ---
+@app.get("/api/stations/{station_id}/sensors")
+async def get_station_sensors(station_id: int):
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT * FROM sensors 
+        WHERE station_id = ? 
+        ORDER BY sequence_number ASC
+    ''', (station_id,))
+    sensors = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return sensors
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)
+
+
