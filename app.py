@@ -34,8 +34,13 @@ def inject_custom_css():
         /* ---- Genel Zemin & Tipografi ---- */
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
-        html, body, [class*="css"] {
+        html, body, [class*="css"], .main {
             font-family: 'Inter', sans-serif;
+            overflow-anchor: none !important;
+        }
+
+        div[data-testid="stPlotlyChart"] {
+            min-height: 480px !important;
         }
 
         .stApp {
@@ -277,6 +282,53 @@ def render_admin_panel():
     st.sidebar.caption("Sistemde onay bekleyen yeni kayıt bulunmuyor.")
 
 
+@st.fragment(run_every="5s")
+def render_live_chart_fragment(station_id, limit, station_name):
+    """Sadece bu grafik alanını sayfayı yukarı kaydırmadan 5 saniyede bir canlı yeniler."""
+    try:
+        res_history = requests.get(f"{API_BASE_URL}/sensor/history?station_id={station_id}&limit={limit}", timeout=5)
+        sensor_logs = res_history.json() if res_history.status_code == 200 else []
+    except Exception:
+        sensor_logs = []
+
+    if sensor_logs:
+        df_sensor = pd.DataFrame(sensor_logs)
+        if "recorded_at" in df_sensor.columns:
+            df_sensor["recorded_at"] = pd.to_datetime(df_sensor["recorded_at"], errors="coerce")
+        df_sensor["sensor_label"] = df_sensor["sensor_id"].apply(lambda x: f"Sensör #{x}")
+
+        ctrl_col1, ctrl_col2 = st.columns(2)
+        available_sensors = df_sensor["sensor_label"].unique().tolist()
+        selected_sensor = ctrl_col1.selectbox("Analiz Edilecek Sensör:", available_sensors, key=f"sensor_select_{station_id}")
+        
+        df_filtered = df_sensor[df_sensor["sensor_label"] == selected_sensor]
+
+        fig = px.line(
+            df_filtered,
+            x="recorded_at" if "recorded_at" in df_filtered.columns else "id",
+            y="raw_value",
+            title=f"{station_name} — {selected_sensor} Canlı Sensör Ölçüm Grafiği",
+            markers=True,
+            labels={"recorded_at": "Zaman", "id": "Log ID", "raw_value": "Ölçülen Değer"}
+        )
+        fig.update_traces(line=dict(color="#3b82f6", width=3), marker=dict(size=7, color="#60a5fa"))
+        fig.update_layout(
+            height=480,
+            hovermode="x unified",
+            template="plotly_dark",
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            font=dict(family="Inter, sans-serif", color="#dbe6f7"),
+            title_font=dict(size=17, color="#f5f8ff"),
+            margin=dict(l=10, r=10, t=55, b=10),
+        )
+        fig.update_xaxes(gridcolor="rgba(255,255,255,0.08)")
+        fig.update_yaxes(gridcolor="rgba(255,255,255,0.08)")
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("İstasyon için henüz canlı sensör verisi bulunamadı.")
+
+
 # ---------------------------------------------------------
 # 5. ANA KONTROL PANELİ & SENSÖR ANALİZİ
 # ---------------------------------------------------------
@@ -306,190 +358,57 @@ def render_dashboard():
         unsafe_allow_html=True
     )
 
-    # API'den Cihaz Geçmişini Çek (/api/device/history)
+    # API'den İstasyon Listesini Çek (/api/stations)
     with st.container():
         st.markdown("##### ⚙️ Veri Kaynağı Ayarları")
         limit = st.slider("Çekilecek Log Sayısı (Limit):", min_value=5, max_value=200, value=50)
 
     try:
-        with st.spinner("Cihaz verileri sunucudan alınıyor..."):
-            res = requests.get(f"{API_BASE_URL}/device/history?limit={limit}", timeout=5)
-            device_logs = res.json() if res.status_code == 200 else []
+        with st.spinner("İstasyonlar sunucudan alınıyor..."):
+            res_stations = requests.get(f"{API_BASE_URL}/stations", timeout=5)
+            stations = res_stations.json() if res_stations.status_code == 200 else []
     except Exception as e:
         st.error(f"API sunucusuna bağlanılamadı ({API_BASE_URL}): {e}")
-        device_logs = []
+        stations = []
 
-    if not device_logs:
-        st.warning("Veritabanında henüz cihaza ait log kaydı bulunmuyor. Simülatörü (`SmartCam.py`) çalıştırdığınızdan emin olun.")
+    if not stations:
+        st.warning("Veritabanında kayıtlı istasyon bulunamadı. Lütfen backend'i çalıştırdığınızdan emin olun.")
         return
 
-    # İstasyon Kodlarına (ist_code) Göre Grupla
-    station_codes = list(set([
-        log.get("ist_code") or log.get("istCode") 
-        for log in device_logs 
-        if log.get("ist_code") or log.get("istCode")
-    ]))
-    
-    if not station_codes:
-        station_codes = ["Tüm Cihazlar"]
-
     st.markdown("---")
-    selected_station_code = st.selectbox("🛰️ Görüntülenecek İstasyonu Seçiniz (ist_code):", station_codes)
-
-    # Seçilen İstasyonun Log Kayıtlarını Filtrele
-    selected_logs = [
-        log for log in device_logs 
-        if (log.get("ist_code") == selected_station_code or log.get("istCode") == selected_station_code)
-    ]
-    if not selected_logs:
-        selected_logs = device_logs
-
-    latest_log = selected_logs[0]  # En son gelen kayıt
+    
+    # İstasyon Seçimi
+    station_map = {f"{s['name']} (ID: {s['id']})": s for s in stations}
+    selected_option = st.selectbox("🛰️ Görüntülenecek İstasyonu Seçiniz:", list(station_map.keys()))
+    selected_station = station_map[selected_option]
+    station_id = selected_station["id"]
 
     # --- İSTASYON DURUMU VE METRİK KARTLARI ---
     st.markdown("### 📊 İstasyon Son Durumu")
     c1, c2, c3, c4 = st.columns(4)
     
-    ist_name = latest_log.get("ist_code") or latest_log.get("istCode", "N/A")
-    c1.metric("İstasyon Kodu", ist_name)
-    c2.metric("IP Adresi", latest_log.get("ip_address") or latest_log.get("ip", "N/A"))
-    c3.metric("Son Kayıt ID", f"#{latest_log.get('id', 'N/A')}")
-    c4.metric("Veri Zamanı", latest_log.get("created_at", "N/A"))
+    c1.metric("İstasyon Adı", selected_station.get("name", "N/A"))
+    c2.metric("IP Adresi", selected_station.get("gsm_ip") or "192.168.1.100")
+    c3.metric("IMEI No", selected_station.get("imei", "N/A"))
+    c4.metric("Son Güncelleme", selected_station.get("updated_at", "N/A"))
 
     st.markdown("#### 🩺 Telemetri Durumu")
     m1, m2, m3 = st.columns(3)
     
-    acc_val = latest_log.get("battery_percent") or latest_log.get("accumulatorPercent", 0)
-    gsm_val = latest_log.get("gsm_signal") or latest_log.get("gsmSignalPercent", 0)
-    temp_val = latest_log.get("temp", "N/A")
+    acc_val = selected_station.get("battery_percent", 0)
+    gsm_val = selected_station.get("gsm_percent", 0)
 
     m1.metric("🔋 Akü Durumu", get_status_indicator(acc_val))
     m2.metric("📶 GSM Sinyali", get_status_indicator(gsm_val))
-    m3.metric("🌡️ Cihaz Sıcaklığı", f"{temp_val} °C" if temp_val != "N/A" else "N/A")
+    m3.metric("🖥️ Cihaz Tipi", selected_station.get("device_type", "Gateway"))
 
     st.markdown("---")
 
-    # --- SENSÖR ÖLÇÜMLERİ ZAMAN SERİSİ VE ROL BAZLI SEKME YÖNETİMİ ---
+    # --- SENSÖR ÖLÇÜMLERİ ZAMAN SERİSİ ---
     st.markdown("### 📈 Sensör Analizleri ve SCADA Denetim Ekranı")
 
-    # Sensör Loglarını Tabloya Dönüştürme (smartcam_db.py İle Tam Uyumlu)
-    sensor_rows = []
-    for log in selected_logs:
-        log_id = log.get("id")
-        created_at = log.get("created_at") or log.get("timestamp")
-        
-        # main.py içerisinden gelen "sensorData" dizisi
-        sensor_list = log.get("sensorData", [])
-        for s in sensor_list:
-            sensor_rows.append({
-                "device_log_id": log_id,
-                "created_at": created_at,
-                "sensor_id": f"Sensör #{s.get('sensor_id')}",
-                "avg_value": s.get("avg_value"),
-                "gsm_signal": s.get("gsm_signal"),
-                "battery_percent": s.get("battery_percent")
-            })
-
-    if sensor_rows:
-        df_sensor = pd.DataFrame(sensor_rows)
-        if "created_at" in df_sensor.columns:
-            df_sensor["created_at"] = pd.to_datetime(df_sensor["created_at"], errors="coerce")
-
-        # ---------------------------------------------------------
-        # 👑 ADMIN VS 👤 OPERATÖR SEKME AYRIMI (KATMANLI YETKİ)
-        # ---------------------------------------------------------
-        if st.session_state.role == "admin":
-            tabs = st.tabs([
-                "📉 Canlı Zaman Serisi Grafiği", 
-                "📄 Ham SQL Veri Dökümü (Admin)", 
-                "⚙️ İstasyon Parametre Yönetimi (Admin)"
-            ])
-            tab_chart, tab_data, tab_settings = tabs
-        else:
-            tabs = st.tabs(["📉 Canlı Zaman Serisi Grafiği"])
-            tab_chart = tabs[0]
-            tab_data = None
-            tab_settings = None
-
-        # 1. SEKME: CANLI GRAFİK (HER İKİ ROL İÇİN AÇIK)
-        with tab_chart:
-            ctrl_col1, ctrl_col2 = st.columns(2)
-            
-            available_sensors = df_sensor["sensor_id"].unique().tolist()
-            selected_sensor = ctrl_col1.selectbox("Analiz Edilecek Sensör:", available_sensors)
-            
-            df_filtered = df_sensor[df_sensor["sensor_id"] == selected_sensor]
-
-            fig = px.line(
-                df_filtered,
-                x="created_at" if "created_at" in df_filtered.columns else "device_log_id",
-                y="avg_value",
-                title=f"{selected_station_code} — {selected_sensor} Ortalama Ölçüm Grafiği (avg_value)",
-                markers=True,
-                labels={
-                    "created_at": "Zaman", 
-                    "device_log_id": "Log ID", 
-                    "avg_value": "Ortalama Değer (avg_value)"
-                }
-            )
-            fig.update_traces(line=dict(color="#3b82f6", width=3), marker=dict(size=7, color="#60a5fa"))
-            fig.update_layout(
-                hovermode="x unified",
-                template="plotly_dark",
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
-                font=dict(family="Inter, sans-serif", color="#dbe6f7"),
-                title_font=dict(size=17, color="#f5f8ff"),
-                margin=dict(l=10, r=10, t=55, b=10),
-            )
-            fig.update_xaxes(gridcolor="rgba(255,255,255,0.08)")
-            fig.update_yaxes(gridcolor="rgba(255,255,255,0.08)")
-            st.plotly_chart(fig, use_container_width=True)
-
-        # 2. SEKME: HAM VERİ TABLOSU VE İNDİRME (SADECE ADMIN)
-        if tab_data is not None:
-            with tab_data:
-                st.caption("Aşağıdaki tablo doğrudan veritabanındaki ana ve alt sensör loglarından oluşturulmuştur.")
-                
-                exp_col1, exp_col2 = st.columns(2)
-                with exp_col1:
-                    st.download_button(
-                        label="📥 Ana İstasyon Verilerini İndir (CSV)",
-                        data=pd.DataFrame(selected_logs).to_csv(index=False).encode("utf-8"),
-                        file_name=f"{selected_station_code}_cihaz_loglari.csv",
-                        mime="text/csv",
-                        use_container_width=True
-                    )
-                with exp_col2:
-                    st.download_button(
-                        label="📥 Sensör Alt Ölçümlerini İndir (CSV)",
-                        data=df_sensor.to_csv(index=False).encode("utf-8"),
-                        file_name=f"{selected_station_code}_sensor_loglari.csv",
-                        mime="text/csv",
-                        use_container_width=True
-                    )
-                
-                st.dataframe(
-                    df_sensor[["device_log_id", "created_at", "sensor_id", "avg_value", "battery_percent", "gsm_signal"]],
-                    use_container_width=True,
-                    hide_index=True
-                )
-
-        # 3. SEKME: İSTASYON PARAMETRELERİ (SADECE ADMIN)
-        if tab_settings is not None:
-            with tab_settings:
-                st.subheader("⚙️ Uzaktan Cihaz ve Eşik Değeri Yapılandırması")
-                st.caption("Buradan gönderilen ayarlar sahadaki IoT cihazının telemetri parametrelerini günceller.")
-
-                sc1, sc2 = st.columns(2)
-                min_acc_alarm = sc1.number_input("Kritik Akü Alarm Seviyesi (%)", min_value=5, max_value=50, value=20)
-                interval_min = sc2.selectbox("Veri Gönderim Periyodu (Dakika)", [1, 5, 10, 15, 30, 60], index=1)
-
-                if st.button("Ayarları İstasyona Gönder", type="primary"):
-                    st.success(f"[{selected_station_code}] İstasyonuna yeni yapılandırma başarıyla iletildi!")
-
-    else:
-        st.info("Cihaz logunun altında detaylandırılmış sensör verisi (`sensor_logs`) bulunamadı.")
+    # STREAMLIT FRAGMENT: Sayfayı yukarı kaydırmadan sadece bu grafik bileşenini 5 saniyede bir canlı yeniler
+    render_live_chart_fragment(station_id, limit, selected_station["name"])
 
 
 # ---------------------------------------------------------

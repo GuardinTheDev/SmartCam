@@ -6,7 +6,6 @@ from contextlib import asynccontextmanager
 import smartcam_db as database
 import sqlite3
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     database.init_db()
@@ -322,6 +321,6 @@ async def get_station_sensors(station_id: int):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=8000)
 
 
