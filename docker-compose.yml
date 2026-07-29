@@ -29,5 +29,5 @@ services:
       - api
     environment:
       - API_URL=http://api:8000/api/device/history
-    command: streamlit run app.py --server.port=8501 --server.address=0.0.0.0
+    command: python -m streamlit run app.py --server.port=8501 --server.address=0.0.0.0
     restart: always
