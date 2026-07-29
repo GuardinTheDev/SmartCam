@@ -65,7 +65,7 @@ class StationCreateRequest(BaseModel):
 
 class SensorCreateRequest(BaseModel):
     station_id: int
-    label: str                                    
+    label: str                                      
     sequence_number: Optional[int] = None          
     channel_category_id: Optional[int] = 100
     unit_type: Optional[str] = "custom"
@@ -73,15 +73,12 @@ class SensorCreateRequest(BaseModel):
     default_value: Optional[float] = 0.0
 
 
-
 # --- 1. CİHAZ PAKET ALMA ENDPOINT'İ ---
 @app.post("/api/device/data")
 async def receive_device_data(payload: IoTDataPayload):
-    # Dinamik Güvenlik Kodu & IMEI Doğrulaması
     station = database.verify_station(payload.securityCode, payload.imei)
     
     if not station:
-        # Paket yanlış/yetkisiz ise ilgili yerler kesinlikle güncellenmeyecek!
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, 
             detail="Yetkisiz veya Tanımsız İstasyon! Güvenlik kodu / IMEI eşleşmiyor."
@@ -97,11 +94,25 @@ async def receive_device_data(payload: IoTDataPayload):
         raise HTTPException(status_code=500, detail=f"Veritabanı işleme hatası: {str(e)}")
 
 
-# --- 2. KULLANICI KAYIT OLMA (REGISTER - ADMİN ONAYINA GİDER) ---
+# --- 2. KULLANICI KAYIT OLMA (REGISTER - AKILLI VE ESNEK KAYIT) ---
 @app.post("/api/auth/register")
 async def register_user(credentials: RegisterRequest):
     conn = database.get_db_connection()
     cursor = conn.cursor()
+    
+    # 1. Önce bu kullanıcı adı daha önce alınmış mı bakalım
+    cursor.execute("SELECT id, status FROM users WHERE username = ?", (credentials.username,))
+    existing_user = cursor.fetchone()
+    
+    if existing_user:
+        user_dict = dict(existing_user)
+        # Eğer eski kayıt 'rejected' (reddedilmiş) ise, eskiyi silip yenisine izin ver!
+        if user_dict["status"] == "rejected":
+            cursor.execute("DELETE FROM users WHERE id = ?", (user_dict["id"],))
+        else:
+            conn.close()
+            raise HTTPException(status_code=400, detail="Bu kullanıcı adı zaten alınmış veya onay bekliyor!")
+            
     try:
         cursor.execute(
             "INSERT INTO users (username, password, role, status) VALUES (?, ?, 'user', 'pending')", 
@@ -160,21 +171,26 @@ async def get_pending_users():
     return pending_users
 
 
-# --- 5. ADMİN İÇİN KULLANICI ONAYLAMA / REDDETME ---
+# --- 5. ADMİN İÇİN KULLANICI ONAYLAMA / REDDETME (SİLME DESTEKLİ) ---
 @app.post("/api/admin/approve-user")
 async def approve_or_reject_user(req: UserApprovalRequest):
     if req.action not in ["approve", "reject"]:
         raise HTTPException(status_code=400, detail="Geçersiz işlem! 'approve' veya 'reject' olmalı.")
         
-    new_status = "approved" if req.action == "approve" else "rejected"
-    
     conn = database.get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("UPDATE users SET status = ? WHERE id = ?", (new_status, req.user_id))
+    
+    if req.action == "approve":
+        cursor.execute("UPDATE users SET status = 'approved' WHERE id = ?", (req.user_id,))
+        action_text = "onaylandı"
+    else:
+        # REDDEDİLİNCE TABLODAN SİL (Böylece aynı isimle tekrar kaydolunabilir)
+        cursor.execute("DELETE FROM users WHERE id = ?", (req.user_id,))
+        action_text = "reddedildi ve sistemden silindi"
+        
     conn.commit()
     conn.close()
     
-    action_text = "onaylandı" if req.action == "approve" else "reddedildi"
     return {"status": "success", "message": f"Kullanıcı başvurusu {action_text}."}
 
 
@@ -214,11 +230,9 @@ async def create_station(station: StationCreateRequest):
     conn = database.get_db_connection()
     cursor = conn.cursor()
     
-    # SYSTEM OTOMATİK OLARAK 128 KARAKTERLİK HASH KODUNU ÜRETİR
     auto_security_code = database.generate_secure_token()
     
     try:
-        # 1. Yeni İstasyonu Kaydet (Otomatik Hash Kodu İle)
         cursor.execute('''
             INSERT INTO stations (category_id, name, security_code, imei, phone_number, device_type)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -233,7 +247,6 @@ async def create_station(station: StationCreateRequest):
         
         new_station_id = cursor.lastrowid
         
-        # 2. İstasyona Varsayılan 0 Değerli Sensörleri Ekle
         default_sensors = [
             (new_station_id, 1, "Sıcaklık", 101, "temperature", "celsius", 0),
             (new_station_id, 2, "Su Seviyesi", 102, "level", "cm", 0),
@@ -262,13 +275,13 @@ async def create_station(station: StationCreateRequest):
             detail="Bu IMEI numarası zaten başka bir istasyonda kayıtlı!"
         )
 
+
 # --- 9. İSTASYONA YENİ SENSÖR EKLEME ---
 @app.post("/api/sensors")
 async def create_sensor(sensor: SensorCreateRequest):
     conn = database.get_db_connection()
     cursor = conn.cursor()
     
-    # EĞER SIRA NUMARASI GİRİLMEMİŞSE OTOMATİK HESAPLA (MAX + 1)
     seq_num = sensor.sequence_number
     if not seq_num:
         cursor.execute(
@@ -283,7 +296,7 @@ async def create_sensor(sensor: SensorCreateRequest):
             VALUES (?, ?, ?, ?, ?, ?, ?)
         ''', (
             sensor.station_id,
-            seq_num,  # Otomatik verilen veya kullanıcının girdiği sıra no
+            seq_num,
             sensor.label,
             sensor.channel_category_id,
             sensor.unit_type,
@@ -305,6 +318,7 @@ async def create_sensor(sensor: SensorCreateRequest):
         conn.close()
         raise HTTPException(status_code=500, detail=f"Sensör ekleme hatası: {str(e)}")
 
+
 # --- 10. İSTASYONA AİT SENSÖRLERİ LİSTELEME ---
 @app.get("/api/stations/{station_id}/sensors")
 async def get_station_sensors(station_id: int):
@@ -319,8 +333,7 @@ async def get_station_sensors(station_id: int):
     conn.close()
     return sensors
 
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)
-
-
