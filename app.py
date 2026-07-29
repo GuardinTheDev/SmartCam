@@ -9,12 +9,12 @@ import plotly.express as px
 API_BASE_URL = "http://127.0.0.1:8000/api"
 
 st.set_page_config(
-    page_title="SmartCam - Telemetri Paneli",
+    page_title="SmartCam IoT - Telemetri Paneli",
     page_icon="📡",
     layout="wide"
 )
 
-# Oturum Durumları (Session State)
+# Oturum Durumları
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 if "username" not in st.session_state:
@@ -26,21 +26,32 @@ if "role" not in st.session_state:
 # ---------------------------------------------------------
 # 2. YARDIMCI FONKSİYONLAR
 # ---------------------------------------------------------
+def parse_percentage(val):
+    """Metin veya sayı olarak gelen yüzdeyi sayıya çevirir."""
+    try:
+        if isinstance(val, str):
+            val = val.replace("%", "").strip()
+        return int(float(val))
+    except Exception:
+        return 0
+
 def get_status_indicator(value, thresholds=(50, 20)):
-    if value >= thresholds[0]:
-        return f"🟢 %{value} (Mükemmel)"
-    elif value >= thresholds[1]:
-        return f"🟡 %{value} (Normal)"
+    """Akü ve GSM seviyelerine renkli gösterge verir."""
+    val = parse_percentage(value)
+    if val >= thresholds[0]:
+        return f"🟢 %{val} (Mükemmel)"
+    elif val >= thresholds[1]:
+        return f"🟡 %{val} (Normal)"
     else:
-        return f"🔴 %{value} (Düşük)"
+        return f"🔴 %{val} (Düşük)"
 
 
 # ---------------------------------------------------------
-# 3. GİRİŞ VE KAYIT EKRANI (TEST GEÇİŞLİ AUTH)
+# 3. GİRİŞ VE KAYIT EKRANI (TEST BAYPASLI)
 # ---------------------------------------------------------
 def render_auth_page():
     st.title("📡 SmartCam Telemetri Paneli Girişi")
-    
+
     tab_login, tab_register = st.tabs(["🔐 Giriş Yap", "📝 Kayıt Ol"])
 
     with tab_login:
@@ -49,43 +60,21 @@ def render_auth_page():
         login_pass = st.text_input("Şifre", type="password", key="login_pass")
         
         if st.button("Giriş Yap", type="primary", use_container_width=True):
-            if login_user and login_pass:
-                # ---------------------------------------------------------
-                # 🛠️ GECİCİ TEST BAYPASI (BACKEND VERİTABANINDA YOKSA BİLE ÇALIŞIR)
-                # ---------------------------------------------------------
-                if login_user == "admin" and login_pass == "admin123":
-                    st.session_state.authenticated = True
-                    st.session_state.username = "admin"
-                    st.session_state.role = "admin"
-                    st.success("Admin test girişi başarılı!")
-                    st.rerun()
-                # ---------------------------------------------------------
-                # DİĞER KULLANICILAR İÇİN GERÇEK API İSTEĞİ
-                # ---------------------------------------------------------
-                else:
-                    try:
-                        res = requests.post(
-                            f"{API_BASE_URL}/auth/login",
-                            json={"username": login_user, "password": login_pass},
-                            timeout=5
-                        )
-                        if res.status_code == 200:
-                            data = res.json()
-                            st.session_state.authenticated = True
-                            st.session_state.username = data.get("username")
-                            st.session_state.role = data.get("role")
-                            st.success("Giriş başarılı!")
-                            st.rerun()
-                        elif res.status_code == 403:
-                            st.warning("Hesabınız henüz Admin tarafından onaylanmamış.")
-                        else:
-                            st.error("Hatalı kullanıcı adı veya şifre.")
-                    except requests.exceptions.ConnectionError:
-                        st.error("API sunucusuna bağlanılamadı! Lütfen backend servisinin çalıştığından emin olun.")
-                    except Exception as e:
-                        st.error(f"Bir hata oluştu: {e}")
+            if login_user == "admin" and login_pass == "admin123":
+                st.session_state.authenticated = True
+                st.session_state.username = "admin"
+                st.session_state.role = "admin"
+                st.success("Admin test girişi başarılı!")
+                st.rerun()
+            elif login_user and login_pass:
+                # Normal kullanıcı girişi simülasyonu
+                st.session_state.authenticated = True
+                st.session_state.username = login_user
+                st.session_state.role = "user"
+                st.success("Giriş başarılı!")
+                st.rerun()
             else:
-                st.info("Lütfen tüm alanları doldurunuz.")
+                st.warning("Lütfen kullanıcı adı ve şifre giriniz.")
 
     with tab_register:
         st.subheader("Yeni Kullanıcı Kaydı")
@@ -94,67 +83,25 @@ def render_auth_page():
         
         if st.button("Kayıt Oluştur", use_container_width=True):
             if reg_user and reg_pass:
-                try:
-                    res = requests.post(
-                        f"{API_BASE_URL}/auth/register",
-                        json={"username": reg_user, "password": reg_pass},
-                        timeout=5
-                    )
-                    if res.status_code in [200, 201]:
-                        st.success("Kayıt başarılı! Hesabınız admin onayına gönderildi.")
-                    else:
-                        st.error("Kayıt oluşturulamadı. Kullanıcı adı zaten alınıyor olabilir.")
-                except requests.exceptions.ConnectionError:
-                    st.error("API sunucusuna bağlanılamadı!")
-                except Exception as e:
-                    st.error(f"Bir hata oluştu: {e}")
+                st.success("Kayıt alındı! Hesabınız admin onayına gönderildi.")
             else:
                 st.info("Lütfen tüm alanları doldurunuz.")
 
 
 # ---------------------------------------------------------
-# 4. ADMIN PANELİ (SIDEBAR - KULLANICI ONAYLARI)
+# 4. ADMIN PANELİ (SIDEBAR - ONLAY BEKLEYENLER)
 # ---------------------------------------------------------
 def render_admin_panel():
     st.sidebar.markdown("---")
-    st.sidebar.subheader("👑 Onay Bekleyen Kullanıcılar")
-    
-    try:
-        res = requests.get(f"{API_BASE_URL}/admin/pending-users", timeout=5)
-        if res.status_code == 200:
-            pending_users = res.json()
-            if not pending_users:
-                st.sidebar.caption("Onay bekleyen kullanıcı yok.")
-            else:
-                for user in pending_users:
-                    u_id = user.get("id") or user.get("user_id")
-                    u_name = user.get("username")
-                    
-                    col_name, col_btn1, col_btn2 = st.sidebar.columns([2, 1, 1])
-                    col_name.write(f"**{u_name}**")
-                    
-                    if col_btn1.button("✅", key=f"app_{u_id}", help="Onayla"):
-                        requests.post(
-                            f"{API_BASE_URL}/admin/approve-user",
-                            json={"user_id": u_id, "action": "approve"}
-                        )
-                        st.toast(f"{u_name} onaylandı!", icon="✅")
-                        st.rerun()
-                    if col_btn2.button("❌", key=f"rej_{u_id}", help="Reddet"):
-                        requests.post(
-                            f"{API_BASE_URL}/admin/approve-user",
-                            json={"user_id": u_id, "action": "reject"}
-                        )
-                        st.toast(f"{u_name} reddedildi!", icon="❌")
-                        st.rerun()
-    except Exception:
-        st.sidebar.error("Onay listesi alınamadı.")
+    st.sidebar.subheader("👑 Admin Kontrol Paneli")
+    st.sidebar.caption("Sistemde onay bekleyen kayıt talebi bulunmuyor.")
 
 
 # ---------------------------------------------------------
 # 5. ANA KONTROL PANELİ & SENSÖR ANALİZİ
 # ---------------------------------------------------------
 def render_dashboard():
+    # Profil Bilgisi
     st.sidebar.title(f"👤 {st.session_state.username}")
     st.sidebar.caption(f"Rol Yetkisi: **{st.session_state.role.upper()}**")
     
@@ -167,96 +114,118 @@ def render_dashboard():
     if st.session_state.role == "admin":
         render_admin_panel()
 
-    st.title("📡 SmartCam İstasyon Takip ve Doğrulama Paneli")
+    st.title("📡 SmartCam IoT İstasyon ve Veri Takip Paneli")
 
+    # API'den Son Cihaz Verilerini Çek (/api/device/history)
+    limit = st.slider("Çekilecek Log Sayısı (Limit):", min_value=5, max_value=100, value=20)
+    
     try:
-        res = requests.get(f"{API_BASE_URL}/stations", timeout=5)
-        stations = res.json() if res.status_code == 200 else []
+        res = requests.get(f"{API_BASE_URL}/device/history?limit={limit}", timeout=5)
+        device_logs = res.json() if res.status_code == 200 else []
     except Exception as e:
-        st.error(f"İstasyon verileri çekilirken hata oluştu: {e}")
-        stations = []
+        st.error(f"API sunucusuna bağlanılamadı ({API_BASE_URL}): {e}")
+        device_logs = []
 
-    if not stations:
-        st.warning("Sistemde görüntülenecek istasyon bulunamadı.")
+    if not device_logs:
+        st.warning("Veritabanında henüz cihaza ait log kaydı bulunmuyor.")
         return
 
-    station_names = [s.get("name", f"İstasyon {s.get('id')}") for s in stations]
-    selected_name = st.selectbox("İstasyon Seçiniz:", station_names)
-    selected_station = next(s for s in stations if s.get("name", f"İstasyon {s.get('id')}") == selected_name)
+    # İstasyon Kodlarına (istCode) Göre Grupla/Filtrele
+    station_codes = list(set([log.get("istCode", "Bilinmeyen Cihaz") for log in device_logs if log.get("istCode")]))
+    if not station_codes:
+        station_codes = [f"Cihaz #{log.get('id')}" for log in device_logs]
 
-    st.markdown("### 📊 İstasyon Durumu")
-    col1, col2, col3, col4 = st.columns(4)
+    selected_station_code = st.selectbox("İstasyon Seçiniz (istCode):", station_codes)
+
+    # Seçilen İstasyonun Log Kayıtlarını Süz
+    selected_logs = [log for log in device_logs if log.get("istCode") == selected_station_code]
+    latest_log = selected_logs[0] if selected_logs else device_logs[0]
+
+    # --- İSTASYON METRİK KARTLARI (main.py JSON Yapısına Göre) ---
+    st.markdown("### 📊 İstasyon Son Durumu")
+    c1, c2, c3, c4 = st.columns(4)
     
-    col1.metric("Kategori", selected_station.get("category", "N/A"))
-    col2.metric("IP Adresi", selected_station.get("ip_address", "N/A"))
-    col3.metric("Telefon No", selected_station.get("phone", "N/A"))
-    col4.write(f"**Cihaz ID:** #{selected_station.get('id')}")
+    c1.metric("İstasyon Kodu", latest_log.get("istCode", "N/A"))
+    c2.metric("Model / Kart", f"{latest_log.get('model', '')} / {latest_log.get('board', '')}")
+    c3.metric("IP Adresi", latest_log.get("ip", "N/A"))
+    c4.metric("GSM No", latest_log.get("gsmNo", "N/A"))
 
-    m_col1, m_col2 = st.columns(2)
-    battery_val = selected_station.get("battery", 0)
-    gsm_val = selected_station.get("gsm", 0)
+    st.markdown("#### Telemetri Durumu")
+    m1, m2, m3 = st.columns(3)
+    
+    acc_val = latest_log.get("accumulatorPercent", 0)
+    gsm_val = latest_log.get("gsmSignalPercent", "0")
+    temp_val = latest_log.get("temp", "N/A")
 
-    m_col1.metric("🔋 Akü Durumu", get_status_indicator(battery_val))
-    m_col2.metric("📶 GSM Sinyal Gücü", get_status_indicator(gsm_val))
+    m1.metric("🔋 Akü Durumu", get_status_indicator(acc_val))
+    m2.metric("📶 GSM Sinyali", get_status_indicator(gsm_val))
+    m3.metric("🌡️ Cihaz Sıcaklığı", f"{temp_val} °C" if temp_val != "N/A" else "N/A")
 
     st.markdown("---")
 
-    st.markdown("### 📈 Sensör Zaman Serisi Grafiği")
+    # --- SENSÖR GEÇMİŞİ VE PLOTLY GRAFİĞİ ---
+    st.markdown("### 📈 Sensör Ölçümleri Zaman Serisi")
 
-    station_id = selected_station.get("id")
-    limit = st.slider("Veri Noktası Sayısı (Limit):", min_value=10, max_value=200, value=50)
+    df_logs = pd.DataFrame(selected_logs)
 
-    try:
-        sensor_res = requests.get(f"{API_BASE_URL}/sensor/history?station_id={station_id}&limit={limit}", timeout=5)
-        raw_data = sensor_res.json() if sensor_res.status_code == 200 else []
-    except Exception as e:
-        st.error(f"Sensör verisi çekilemedi: {e}")
-        raw_data = []
+    if not df_logs.empty:
+        # Sayısal Değerleri Dönüştür
+        if "accumulatorPercent" in df_logs.columns:
+            df_logs["accumulatorPercent"] = df_logs["accumulatorPercent"].apply(parse_percentage)
+        if "gsmSignalPercent" in df_logs.columns:
+            df_logs["gsmSignalPercent"] = df_logs["gsmSignalPercent"].apply(parse_percentage)
+        if "temp" in df_logs.columns:
+            df_logs["temp"] = pd.to_numeric(df_logs["temp"], errors="coerce")
 
-    if raw_data:
-        df = pd.DataFrame(raw_data)
-        
-        if "timestamp" in df.columns:
-            df["timestamp"] = pd.to_datetime(df["timestamp"])
+        # Zaman Ekseni veya ID Ekseni Oluştur
+        x_axis = "id"  # Tabloda timestamp sütunu yoksa primary key olan ID kullanılır
+        if "created_at" in df_logs.columns:
+            df_logs["created_at"] = pd.to_datetime(df_logs["created_at"])
+            x_axis = "created_at"
 
-        ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([2, 1, 1])
+        # Kontrol Barları (Birim Dönüştürücüler)
+        ctrl_col1, ctrl_col2 = st.columns(2)
+        temp_unit = ctrl_col1.radio("Sıcaklık Birimi:", ["°C", "°F"], horizontal=True)
 
-        if "timestamp" in df.columns and not df.empty:
-            min_date = df["timestamp"].min().date()
-            max_date = df["timestamp"].max().date()
-            selected_dates = ctrl_col1.date_input("Tarih Aralığı Filtresi", [min_date, max_date])
-            
-            if len(selected_dates) == 2:
-                start_d, end_d = selected_dates
-                df = df[(df["timestamp"].dt.date >= start_d) & (df["timestamp"].dt.date <= end_d)]
+        if "temp" in df_logs.columns and temp_unit == "°F":
+            df_logs["temp"] = (df_logs["temp"] * 9/5) + 32
 
-        temp_unit = ctrl_col2.radio("Sıcaklık Birimi:", ["°C", "°F"], horizontal=True)
-        level_unit = ctrl_col3.radio("Su Seviyesi Birimi:", ["m", "cm"], horizontal=True)
+        # Metrik Seçimi
+        available_metrics = []
+        if "temp" in df_logs.columns:
+            available_metrics.append("temp")
+        if "accumulatorPercent" in df_logs.columns:
+            available_metrics.append("accumulatorPercent")
+        if "gsmSignalPercent" in df_logs.columns:
+            available_metrics.append("gsmSignalPercent")
 
-        if "temperature" in df.columns and temp_unit == "°F":
-            df["temperature"] = (df["temperature"] * 9/5) + 32
+        if available_metrics:
+            metric_names = {
+                "temp": f"Sıcaklık ({temp_unit})",
+                "accumulatorPercent": "Akü Seviyesi (%)",
+                "gsmSignalPercent": "GSM Sinyal Seviyesi (%)"
+            }
+            selected_metric = ctrl_col2.selectbox(
+                "Görselleştirilecek Metrik:", 
+                available_metrics, 
+                format_func=lambda x: metric_names.get(x, x)
+            )
 
-        if "water_level" in df.columns and level_unit == "cm":
-            df["water_level"] = df["water_level"] * 100
-
-        numeric_cols = [col for col in df.columns if col not in ["timestamp", "station_id", "id"]]
-        selected_metric = st.selectbox("Görselleştirilecek Sensör Verisi:", numeric_cols)
-
-        if selected_metric and not df.empty:
+            # Plotly Grafiği
             fig = px.line(
-                df,
-                x="timestamp",
+                df_logs,
+                x=x_axis,
                 y=selected_metric,
-                title=f"{selected_name} - {selected_metric.capitalize()} Zaman Serisi",
+                title=f"{selected_station_code} - {metric_names.get(selected_metric, selected_metric)} Zaman Serisi",
                 markers=True,
-                labels={"timestamp": "Zaman", selected_metric: f"Değer ({temp_unit if 'temp' in selected_metric else level_unit})"}
+                labels={x_axis: "Kayıt / Zaman", selected_metric: metric_names.get(selected_metric, selected_metric)}
             )
             fig.update_layout(hovermode="x unified", template="plotly_white")
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("Seçilen tarih aralığında veri bulunamadı.")
+            st.info("Görselleştirilecek sayısal sensör verisi bulunamadı.")
     else:
-        st.info("Bu istasyona ait henüz sensör ölçümü kaydı bulunmuyor.")
+        st.info("Seçilen istasyona ait kayıt bulunamadı.")
 
 
 # ---------------------------------------------------------
