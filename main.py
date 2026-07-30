@@ -5,6 +5,8 @@ from typing import Dict, List, Optional
 from contextlib import asynccontextmanager
 import smartcam_db as database
 import sqlite3
+import hashlib
+import time
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -59,7 +61,7 @@ class UserApprovalRequest(BaseModel):
 class StationCreateRequest(BaseModel):
     category_id: int
     name: str
-    imei: str
+    imei: Optional[str] = None
     phone_number: Optional[str] = ""
     device_type: Optional[str] = "Gateway"
 
@@ -232,6 +234,14 @@ async def create_station(station: StationCreateRequest):
     
     auto_security_code = database.generate_secure_token()
     
+    # Otomatik Hashlenmiş IMEI Üretimi (Eğer dışarıdan IMEI gönderilmediyse)
+    final_imei = station.imei
+    if not final_imei or not final_imei.strip():
+        raw_seed = f"{station.name}-{station.category_id}-{time.time()}"
+        hash_digest = hashlib.sha256(raw_seed.encode("utf-8")).hexdigest()
+        # SHA-256 hash çıktısını 15 haneli sayısal IMEI formatına dönüştür
+        final_imei = str(int(hash_digest, 16))[:15]
+
     try:
         cursor.execute('''
             INSERT INTO stations (category_id, name, security_code, imei, phone_number, device_type)
@@ -240,7 +250,7 @@ async def create_station(station: StationCreateRequest):
             station.category_id, 
             station.name, 
             auto_security_code,
-            station.imei, 
+            final_imei, 
             station.phone_number, 
             station.device_type
         ))
