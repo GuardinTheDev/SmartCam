@@ -384,15 +384,15 @@ def render_admin_panel():
 
 
 # ---------------------------------------------------------
-# 4.1 CANLI GRAFİK ALANI
+# 4.1 CANLI GRAFİK VE SENSÖR DETAY ALANI
 # ---------------------------------------------------------
-def render_live_chart_section(station_id, limit, station_name):
-    """Grafik ve filtreleri oluşturur. Filtre açıksa fragment yenilemesi tamamen devre dışı kalır."""
+def render_live_chart_section(station_id, limit, station_name, sensor_obj):
+    """Seçilen sensörün metriklerini ve zaman serisi çizim grafiğini gösterir."""
     
     use_date_filter = st.toggle(
         "🕒 Tarih/Saat Aralık Filtresi Uygula", 
         value=False, 
-        key=f"toggle_filter_{station_id}"
+        key=f"toggle_filter_{station_id}_{sensor_obj['id']}"
     )
 
     refresh_interval = None if use_date_filter else "5s"
@@ -418,51 +418,46 @@ def render_live_chart_section(station_id, limit, station_name):
 
         try:
             url = f"{API_BASE_URL}/sensor/history?station_id={station_id}&limit={limit}"
-            if is_filtered and start_dt and end_dt:
-                url += f"&start_time={start_dt.isoformat()}&end_time={end_dt.isoformat()}"
-                
             res_history = requests.get(url, timeout=5)
             sensor_logs = res_history.json() if res_history.status_code == 200 else []
         except Exception:
             sensor_logs = []
 
-        if sensor_logs:
-            df_sensor = pd.DataFrame(sensor_logs)
+        # Sadece seçilen sensör id'sine ait logları filtrele
+        filtered_logs = [log for log in sensor_logs if log.get("sensor_id") == sensor_obj["id"]]
+
+        # Son Okunan Canlı Ölçüm Metriğini Göster
+        if filtered_logs:
+            latest_val = filtered_logs[0].get("raw_value", 0)
+            st.metric(
+                label=f"⚡ Son Okunan Canlı {sensor_obj['label']} Değeri",
+                value=f"{latest_val} {sensor_obj.get('default_unit', '')}"
+            )
+
+        if filtered_logs:
+            df_sensor = pd.DataFrame(filtered_logs)
             if "recorded_at" in df_sensor.columns:
                 df_sensor["recorded_at"] = pd.to_datetime(df_sensor["recorded_at"], errors="coerce")
-            df_sensor["sensor_label"] = df_sensor["sensor_id"].apply(lambda x: f"Sensör #{x}")
 
-            ctrl_col1, _ = st.columns(2)
-            available_sensors = df_sensor["sensor_label"].unique().tolist()
-            selected_sensor = ctrl_col1.selectbox(
-                "Analiz Edilecek Sensör:", 
-                available_sensors, 
-                key=f"sensor_select_{station_id}"
-            )
-            
-            df_filtered = df_sensor[df_sensor["sensor_label"] == selected_sensor]
-
-            if is_filtered and start_dt and end_dt and "recorded_at" in df_filtered.columns:
-                df_filtered = df_filtered[
-                    (df_filtered["recorded_at"] >= start_dt) & 
-                    (df_filtered["recorded_at"] <= end_dt)
+            if is_filtered and start_dt and end_dt and "recorded_at" in df_sensor.columns:
+                df_sensor = df_sensor[
+                    (df_sensor["recorded_at"] >= start_dt) & 
+                    (df_sensor["recorded_at"] <= end_dt)
                 ]
 
-            chart_title = f"{station_name} — {selected_sensor} Canlı Sensör Ölçüm Grafiği"
-            if is_filtered:
-                chart_title = f"{station_name} — {selected_sensor} Tarih Aralığı Ölçümleri"
+            chart_title = f"{station_name} — {sensor_obj['label']} Zaman Serisi Ölçüm Grafiği"
 
             fig = px.line(
-                df_filtered,
-                x="recorded_at" if "recorded_at" in df_filtered.columns else "id",
+                df_sensor,
+                x="recorded_at" if "recorded_at" in df_sensor.columns else "id",
                 y="raw_value",
                 title=chart_title,
                 markers=True,
-                labels={"recorded_at": "Zaman", "id": "Log ID", "raw_value": "Ölçülen Değer"}
+                labels={"recorded_at": "Tarih / Zaman", "id": "Kayıt No", "raw_value": f"Değer ({sensor_obj.get('default_unit', '')})"}
             )
             fig.update_traces(line=dict(color="#3b82f6", width=3), marker=dict(size=7, color="#60a5fa"))
             fig.update_layout(
-                height=480,
+                height=450,
                 hovermode="x unified",
                 template="plotly_dark",
                 plot_bgcolor="rgba(0,0,0,0)",
@@ -475,13 +470,13 @@ def render_live_chart_section(station_id, limit, station_name):
             fig.update_yaxes(gridcolor="rgba(255,255,255,0.08)")
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("Seçilen istasyon veya tarih aralığı için henüz sensör verisi bulunamadı.")
+            st.info(f"ℹ️ '{sensor_obj['label']}' sensörü için henüz veritabanında log kaydı bulunmamaktadır.")
 
     _draw_chart(use_date_filter)
 
 
 # ---------------------------------------------------------
-# 5. ANA KONTROL PANELİ & SENSÖR ANALİZİ
+# 5. ANA KONTROL PANELİ & KADEMELİ İSTASYON/SENSÖR SEÇİMİ
 # ---------------------------------------------------------
 def render_dashboard():
     # Sidebar Profil
@@ -505,19 +500,14 @@ def render_dashboard():
         render_admin_panel()
 
     st.markdown(
-        "<h1>📡 SmartCam IoT İstasyon ve Veri Takip Paneli</h1>",
+        "<h1>📡 SmartCam Telemetri ve Sensör İzleme Paneli</h1>",
         unsafe_allow_html=True
     )
 
     # API'den İstasyon Listesini Çek (/api/stations)
-    with st.container():
-        st.markdown("##### ⚙️ Veri Kaynağı Ayarları")
-        limit = st.slider("Çekilecek Log Sayısı (Limit):", min_value=5, max_value=200, value=50)
-
     try:
-        with st.spinner("İstasyonlar sunucudan alınıyor..."):
-            res_stations = requests.get(f"{API_BASE_URL}/stations", timeout=5)
-            stations = res_stations.json() if res_stations.status_code == 200 else []
+        res_stations = requests.get(f"{API_BASE_URL}/stations", timeout=5)
+        stations = res_stations.json() if res_stations.status_code == 200 else []
     except Exception as e:
         st.error(f"API sunucusuna bağlanılamadı ({API_BASE_URL}): {e}")
         stations = []
@@ -526,39 +516,69 @@ def render_dashboard():
         st.warning("Veritabanında kayıtlı istasyon bulunamadı. Lütfen backend'i çalıştırdığınızdan emin olun.")
         return
 
-    st.markdown("---")
-    
-    # İstasyon Seçimi
+    # --- 1. ADIM: İSTASYON SEÇİMİ ---
+    st.markdown("### 1️⃣ Adım: İstasyon Seçiniz")
+    station_options = ["-- Lütfen Bir İstasyon Seçiniz --"] + [f"{s['name']} (ID: {s['id']})" for s in stations]
     station_map = {f"{s['name']} (ID: {s['id']})": s for s in stations}
-    selected_option = st.selectbox("🛰️ Görüntülenecek İstasyonu Seçiniz:", list(station_map.keys()))
-    selected_station = station_map[selected_option]
+    
+    selected_st_str = st.selectbox("🛰️ İzlemek İstediğiniz İstasyon:", station_options, key="main_st_select")
+
+    if selected_st_str == "-- Lütfen Bir İstasyon Seçiniz --":
+        st.info("👈 Lütfen yukarıdaki listeden analiz etmek istediğiniz bir istasyonu seçiniz.")
+        return
+
+    selected_station = station_map[selected_st_str]
     station_id = selected_station["id"]
 
     # --- İSTASYON DURUMU VE METRİK KARTLARI ---
-    st.markdown("### 📊 İstasyon Son Durumu")
+    st.markdown("---")
+    st.markdown(f"### 📊 [{selected_station['name']}] Genel Durum Kartı")
     c1, c2, c3, c4 = st.columns(4)
-    
     c1.metric("İstasyon Adı", selected_station.get("name", "N/A"))
     c2.metric("IP Adresi", selected_station.get("gsm_ip") or "192.168.1.100")
     c3.metric("IMEI No", selected_station.get("imei", "N/A"))
     c4.metric("Son Güncelleme", selected_station.get("updated_at", "N/A"))
 
-    st.markdown("#### 🩺 Telemetri Durumu")
     m1, m2, m3 = st.columns(3)
-    
     acc_val = selected_station.get("battery_percent", 0)
     gsm_val = selected_station.get("gsm_percent", 0)
-
     m1.metric("🔋 Akü Durumu", get_status_indicator(acc_val))
     m2.metric("📶 GSM Sinyali", get_status_indicator(gsm_val))
     m3.metric("🖥️ Cihaz Tipi", selected_station.get("device_type", "Gateway"))
 
+    # --- 2. ADIM: SENSÖR SEÇİMİ (İSTASYON SEÇİLİNCE GELİR) ---
     st.markdown("---")
+    st.markdown("### 2️⃣ Adım: Sensör Seçiniz")
 
-    # --- SENSÖR ÖLÇÜMLERİ ZAMAN SERİSİ ---
-    st.markdown("### 📈 Sensör Analizleri ve SCADA Denetim Ekranı")
+    # API'den Bu İstasyona Ait Sensörleri Çek (/api/stations/{station_id}/sensors)
+    try:
+        res_sensors = requests.get(f"{API_BASE_URL}/stations/{station_id}/sensors", timeout=5)
+        station_sensors = res_sensors.json() if res_sensors.status_code == 200 else []
+    except Exception:
+        station_sensors = []
 
-    render_live_chart_section(station_id, limit, selected_station["name"])
+    if not station_sensors:
+        st.warning("Bu istasyona tanımlanmış bağlı bir sensör bulunamadı.")
+        return
+
+    sensor_options = ["-- Lütfen Bir Sensör Seçiniz --"] + [f"{s['label']} ({s['default_unit']})" for s in station_sensors]
+    sensor_map = {f"{s['label']} ({s['default_unit']})": s for s in station_sensors}
+
+    selected_sn_str = st.selectbox("🌡️ Analiz Edilecek Sensör:", sensor_options, key=f"sensor_select_{station_id}")
+
+    if selected_sn_str == "-- Lütfen Bir Sensör Seçiniz --":
+        st.info("👈 Sensör ölçüm grafiğini ve canlı verilerini görmek için yukarıdan bir sensör seçiniz.")
+        return
+
+    selected_sensor = sensor_map[selected_sn_str]
+
+    st.markdown("---")
+    st.markdown(f"### 📈 [{selected_station['name']}] — {selected_sensor['label']} Ölçüm Grafiği")
+
+    with st.expander("⚙️ Veri Limit Ayarları"):
+        limit = st.slider("Çekilecek Log Sayısı (Limit):", min_value=5, max_value=200, value=50)
+
+    render_live_chart_section(station_id, limit, selected_station["name"], selected_sensor)
 
 
 # ---------------------------------------------------------
