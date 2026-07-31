@@ -85,17 +85,30 @@ def init_db():
         )
     ''')
 
-    # 5. Kullanıcılar Tablosu
+    # 5. Kullanıcılar Tablosu (Ad Soyad, E-Posta, Telefon ve KVKK Alanları Eklendi)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
             password TEXT NOT NULL,
+            full_name TEXT,
+            email TEXT,
+            phone TEXT,
+            kvkk_approved INTEGER DEFAULT 0,
             role TEXT DEFAULT 'user',
             status TEXT DEFAULT 'pending',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+
+    # Otomatik Sütun Göçü (Migration)
+    cursor.execute("PRAGMA table_info(users)")
+    user_cols = [row['name'] if isinstance(row, sqlite3.Row) else row[1] for row in cursor.fetchall()]
+    if user_cols:
+        new_cols = {'full_name': 'TEXT', 'email': 'TEXT', 'phone': 'TEXT', 'kvkk_approved': 'INTEGER DEFAULT 0'}
+        for col_name, col_type in new_cols.items():
+            if col_name not in user_cols:
+                cursor.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}")
     
     # Varsayılan Admin Kullanıcısı
     cursor.execute('''
