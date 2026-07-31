@@ -223,6 +223,32 @@ def get_status_indicator(value, thresholds=(50, 20)):
 # 3. GİRİŞ VE KAYIT EKRANI
 # ---------------------------------------------------------
 def render_auth_page():
+    # Klavye Yönlendirme Javascript Kodu (Enter veya Alt Ok tuşuna basınca bir sonraki alana geçer)
+    st.components.v1.html("""
+        <script>
+        const parentDoc = window.parent.document;
+        if (!window.keyboardNavInjected) {
+            window.keyboardNavInjected = true;
+            parentDoc.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter' || e.key === 'ArrowDown') {
+                    const active = parentDoc.activeElement;
+                    if (active && active.tagName === 'INPUT') {
+                        const inputs = Array.from(parentDoc.querySelectorAll('input:not([type="hidden"]):not([type="checkbox"])'));
+                        const index = inputs.indexOf(active);
+                        if (index > -1 && index < inputs.length - 1) {
+                            if (e.key === 'ArrowDown' || (e.key === 'Enter' && active.type !== 'password')) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                inputs[index + 1].focus();
+                            }
+                        }
+                    }
+                }
+            }, true);
+        }
+        </script>
+    """, height=0)
+
     left, mid, right = st.columns([1, 1.3, 1])
     with mid:
         st.markdown(
@@ -244,6 +270,7 @@ def render_auth_page():
                 login_user = st.text_input("Kullanıcı Adı / E-Posta / Telefon / Ad Soyad", key="login_user", placeholder="kullanıcı adı, e-posta veya telefon")
                 login_pass = st.text_input("Şifre", type="password", key="login_pass", placeholder="••••••••")
                 
+                st.caption("💡 *İpucu: Giriş yaparken Enter veya ⬇️ Alt Ok tuşuna basarak şifre kutusuna geçebilirsiniz.*")
                 submitted = st.form_submit_button("Giriş Yap", type="primary")
 
                 if submitted:
