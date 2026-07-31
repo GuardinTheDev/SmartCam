@@ -148,13 +148,13 @@ def inject_custom_css():
         }
 
         /* ---- Input alanları ---- */
-        .stTextInput input {
+        .stTextInput input, .stNumberInput input {
             background: rgba(255,255,255,0.04) !important;
             border: 1px solid rgba(255,255,255,0.12) !important;
             border-radius: 10px !important;
             color: #f0f4fb !important;
         }
-        .stTextInput input:focus {
+        .stTextInput input:focus, .stNumberInput input:focus {
             border-color: #3b82f6 !important;
             box-shadow: 0 0 0 2px rgba(59,130,246,0.25) !important;
         }
@@ -223,32 +223,6 @@ def get_status_indicator(value, thresholds=(50, 20)):
 # 3. GİRİŞ VE KAYIT EKRANI
 # ---------------------------------------------------------
 def render_auth_page():
-    # Klavye Yönlendirme Javascript Kodu (Enter veya Alt Ok tuşuna basınca bir sonraki alana geçer)
-    st.components.v1.html("""
-        <script>
-        const parentDoc = window.parent.document;
-        if (!window.keyboardNavInjected) {
-            window.keyboardNavInjected = true;
-            parentDoc.addEventListener('keydown', function(e) {
-                if (e.key === 'Enter' || e.key === 'ArrowDown') {
-                    const active = parentDoc.activeElement;
-                    if (active && active.tagName === 'INPUT') {
-                        const inputs = Array.from(parentDoc.querySelectorAll('input:not([type="hidden"]):not([type="checkbox"])'));
-                        const index = inputs.indexOf(active);
-                        if (index > -1 && index < inputs.length - 1) {
-                            if (e.key === 'ArrowDown' || (e.key === 'Enter' && active.type !== 'password')) {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                inputs[index + 1].focus();
-                            }
-                        }
-                    }
-                }
-            }, true);
-        }
-        </script>
-    """, height=0)
-
     left, mid, right = st.columns([1, 1.3, 1])
     with mid:
         st.markdown(
@@ -262,7 +236,7 @@ def render_auth_page():
 
         st.markdown("<div class='login-card'>", unsafe_allow_html=True)
 
-        tab_login, tab_register = st.tabs(["🔐  Giriş Yap", "📝  Kayıt Ol"])
+        tab_login, tab_register = st.tabs(["🔐   Giriş Yap", "📝   Kayıt Ol"])
 
         with tab_login:
             with st.form("login_form", clear_on_submit=False):
@@ -270,7 +244,6 @@ def render_auth_page():
                 login_user = st.text_input("Kullanıcı Adı / E-Posta / Telefon / Ad Soyad", key="login_user", placeholder="kullanıcı adı, e-posta veya telefon")
                 login_pass = st.text_input("Şifre", type="password", key="login_pass", placeholder="••••••••")
                 
-                st.caption("💡 *İpucu: Giriş yaparken Enter veya ⬇️ Alt Ok tuşuna basarak şifre kutusuna geçebilirsiniz.*")
                 submitted = st.form_submit_button("Giriş Yap", type="primary")
 
                 if submitted:
@@ -361,57 +334,164 @@ def render_auth_page():
 
 
 # ---------------------------------------------------------
-# 4. ADMIN PANELİ (SIDEBAR)
+# 4. ADMİN İÇİN YÖNETİM MERKEZİ (İSTASYON & SENSÖR EKLEME)
 # ---------------------------------------------------------
-def render_admin_panel():
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("👑 Onay Bekleyen Kullanıcılar")
-    
-    try:
-        res = requests.get(f"{API_BASE_URL}/admin/pending-users", timeout=5)
-        if res.status_code == 200:
-            pending_users = res.json()
-            
-            if not pending_users:
-                st.sidebar.caption("Onay bekleyen kullanıcı bulunmuyor.")
+def render_admin_management_center(stations):
+    """Admin kullanıcıları için İstasyon Ekleme, Sensör Ekleme ve Kullanıcı Onaylama Paneli."""
+    with st.expander("🛠️ Admin Yönetim Merkezi (İstasyon, Sensör ve Kullanıcı Yönetimi)", expanded=False):
+        tab_users, tab_add_station, tab_add_sensor = st.tabs([
+            "👥 Kullanıcı Onayları", 
+            "🛰️ Yeni İstasyon Ekle", 
+            "🌡️ Yeni Sensör Ekle"
+        ])
+
+        # --- 4.1. KULLANICI ONAYLARI ---
+        with tab_users:
+            try:
+                res = requests.get(f"{API_BASE_URL}/admin/pending-users", timeout=5)
+                if res.status_code == 200:
+                    pending_users = res.json()
+                    if not pending_users:
+                        st.info("ℹ️ Şu anda onay bekleyen kullanıcı bulunmuyor.")
+                    else:
+                        for user in pending_users:
+                            u_id = user.get("id") or user.get("user_id")
+                            u_name = user.get("username") or user.get("name") or f"Kullanıcı #{u_id}"
+                            full_name = user.get("full_name") or ""
+                            email = user.get("email") or ""
+                            phone = user.get("phone") or ""
+
+                            col_u1, col_u2, col_u3 = st.columns([3, 1, 1])
+                            with col_u1:
+                                st.markdown(f"**👤 {u_name}** ({full_name}) `ID: {u_id}`")
+                                if email or phone:
+                                    st.caption(f"📧 {email} | 📞 {phone}")
+                            with col_u2:
+                                if st.button("✅ Onayla", key=f"app_{u_id}", use_container_width=True):
+                                    requests.post(
+                                        f"{API_BASE_URL}/admin/approve-user",
+                                        json={"user_id": u_id, "action": "approve"}
+                                    )
+                                    st.toast(f"{u_name} onaylandı!", icon="✅")
+                                    st.rerun()
+                            with col_u3:
+                                if st.button("❌ Reddet", key=f"rej_{u_id}", use_container_width=True):
+                                    requests.post(
+                                        f"{API_BASE_URL}/admin/approve-user",
+                                        json={"user_id": u_id, "action": "reject"}
+                                    )
+                                    st.toast(f"{u_name} reddedildi!", icon="❌")
+                                    st.rerun()
+                            st.markdown("---")
+            except Exception:
+                st.error("Kullanıcı listesi alınırken API sunucusuna bağlanılamadı.")
+
+        # --- 4.2. YENİ İSTASYON EKLE ---
+        with tab_add_station:
+            # İstasyon kategorilerini API'den çekelim
+            try:
+                res_cat = requests.get(f"{API_BASE_URL}/station-categories", timeout=5)
+                categories = res_cat.json() if res_cat.status_code == 200 else []
+            except Exception:
+                categories = []
+
+            cat_map = {cat["name"]: cat["id"] for cat in categories} if categories else {"Akarsu": 1, "Baraj": 2, "Gateway": 3, "Yeraltı Suyu": 4}
+
+            with st.form("add_station_form", clear_on_submit=True):
+                st.subheader("Yeni İstasyon Tanımlama")
+                st_name = st.text_input("İstasyon Adı", placeholder="Örn: Kuşadası Barajı Ana İstasyon")
+                
+                col_st1, col_st2 = st.columns(2)
+                with col_st1:
+                    st_category = st.selectbox("İstasyon Kategorisi", list(cat_map.keys()))
+                with col_st2:
+                    st_device_type = st.selectbox("Cihaz Tipi", ["Gateway", "IoT Node", "ESP32-S3", "RTU", "SmartCam"])
+
+                col_st3, col_st4 = st.columns(2)
+                with col_st3:
+                    st_phone = st.text_input("GSM Telefon No (Opsiyonel)", placeholder="0555 000 0000")
+                with col_st4:
+                    st_imei = st.text_input("IMEI Numarası (Opsiyonel - Boşsa otomatik üretilir)", placeholder="15 haneli IMEI")
+
+                st_submitted = st.form_submit_button("🛰️ İstasyonu Kaydet ve Oluştur", type="primary")
+
+                if st_submitted:
+                    if not st_name.strip():
+                        st.warning("⚠️ Lütfen geçerli bir istasyon adı giriniz.")
+                    else:
+                        try:
+                            payload = {
+                                "category_id": cat_map[st_category],
+                                "name": st_name.strip(),
+                                "imei": st_imei.strip() if st_imei.strip() else None,
+                                "phone_number": st_phone.strip(),
+                                "device_type": st_device_type
+                            }
+                            res = requests.post(f"{API_BASE_URL}/stations", json=payload, timeout=5)
+                            if res.status_code == 200:
+                                data = res.json()
+                                st.success(f"✅ {data['message']}")
+                                st.info(
+                                    f"🔑 **Oluşturulan İstasyon ID:** `{data['station_id']}`\n\n"
+                                    f"🔒 **Güvenlik Kodu (securityCode):** `{data['generated_security_code']}`\n\n"
+                                    f"📱 **IMEI No:** `{data.get('imei', 'Otomatik Atandı')}`"
+                                )
+                                st.rerun()
+                            else:
+                                st.error(f"❌ Hata: {res.json().get('detail', 'İstasyon oluşturulamadı.')}")
+                        except Exception as e:
+                            st.error(f"İstasyon eklenirken sunucu hatası oluştu: {e}")
+
+        # --- 4.3. YENİ SENSÖR EKLE ---
+        with tab_add_sensor:
+            if not stations:
+                st.warning("Önce sistemde en az bir istasyon tanımlı olmalıdır.")
             else:
-                for user in pending_users:
-                    u_id = user.get("id") or user.get("user_id")
-                    u_name = user.get("username") or user.get("name") or f"Kullanıcı #{u_id}"
-                    full_name = user.get("full_name") or ""
-                    email = user.get("email") or ""
-                    phone = user.get("phone") or ""
+                station_dict = {f"{s['name']} (ID: {s['id']})": s["id"] for s in stations}
+                with st.form("add_sensor_form", clear_on_submit=True):
+                    st.subheader("İstaya Yeni Sensör Ekle")
+                    selected_st_for_sensor = st.selectbox("Sensörün Ekleneceği İstasyon:", list(station_dict.keys()))
                     
-                    st.sidebar.markdown(f"**👤 {u_name}** ({full_name}) `ID: {u_id}`")
-                    if email or phone:
-                        st.sidebar.caption(f"📧 {email} | 📞 {phone}")
+                    col_sn1, col_sn2 = st.columns(2)
+                    with col_sn1:
+                        sn_label = st.text_input("Sensör Adı / Etiketi", placeholder="Örn: Ortam Sıcaklığı, Su Seviyesi")
+                    with col_sn2:
+                        sn_id = st.number_input("Sensör Kanal ID'si (Opsiyonel - IoT Veri Anahtarı)", min_value=0, max_value=999, value=0, help="Sahadan gönderilen sensorData['ID'] ile eşleşir. 0 bırakılırsa otomatik atanır.")
 
-                    col_btn1, col_btn2 = st.sidebar.columns(2)
-                    
-                    if col_btn1.button("✅ Onayla", key=f"app_{u_id}", use_container_width=True):
-                        requests.post(
-                            f"{API_BASE_URL}/admin/approve-user",
-                            json={"user_id": u_id, "action": "approve"}
-                        )
-                        st.toast(f"{u_name} ({full_name}) başarıyla onaylandı!", icon="✅")
-                        st.rerun()
-                        
-                    if col_btn2.button("❌ Reddet", key=f"rej_{u_id}", use_container_width=True):
-                        requests.post(
-                            f"{API_BASE_URL}/admin/approve-user",
-                            json={"user_id": u_id, "action": "reject"}
-                        )
-                        st.toast(f"{u_name} reddedildi!", icon="❌")
-                        st.rerun()
-                    st.sidebar.markdown("---")
-        else:
-            st.sidebar.caption("Onay listesi sunucudan alınamadı.")
-    except Exception:
-        st.sidebar.error("Backend bağlantısı sağlanamadı.")
+                    col_sn3, col_sn4 = st.columns(2)
+                    with col_sn3:
+                        sn_unit = st.text_input("Ölçüm Birimi", placeholder="Örn: °C, %, cm, bar, m³/s")
+                    with col_sn4:
+                        sn_default_val = st.number_input("Başlangıç (Varsayılan) Değeri", value=0.0, step=0.1)
+
+                    sn_submitted = st.form_submit_button("🌡️ Sensörü İstasyona Tanımla", type="primary")
+
+                    if sn_submitted:
+                        if not sn_label.strip() or not sn_unit.strip():
+                            st.warning("⚠️ Lütfen sensör adı ve ölçüm birimini doldurunuz.")
+                        else:
+                            try:
+                                payload = {
+                                    "station_id": station_dict[selected_st_for_sensor],
+                                    "label": sn_label.strip(),
+                                    "id": int(sn_id) if sn_id > 0 else None,
+                                    "default_unit": sn_unit.strip(),
+                                    "default_value": float(sn_default_val)
+                                }
+                                res = requests.post(f"{API_BASE_URL}/sensors", json=payload, timeout=5)
+                                if res.status_code == 200:
+                                    data = res.json()
+                                    st.success(f"✅ {data['message']}")
+                                    st.info(f"⚡ **Sensör Kanal ID'si:** `{data.get('sensor_id')}` (Cihaz JSON paketinde `sensorData['{data.get('sensor_id')}']` olarak gönderilmelidir)")
+                                    st.rerun()
+                                else:
+                                    st.error(f"❌ Hata: {res.json().get('detail', 'Sensör eklenemedi.')}")
+                            except Exception as e:
+                                st.error(f"Sensör eklenirken sunucu hatası oluştu: {e}")
 
 
 # ---------------------------------------------------------
-# 4.1 CANLI GRAFİK VE SENSÖR DETAY ALANI
+# 4.4 CANLI GRAFİK VE SENSÖR DETAY ALANI
 # ---------------------------------------------------------
 def render_live_chart_section(station_id, limit, station_name, sensor_obj):
     """Seçilen sensörün metriklerini ve zaman serisi çizim grafiğini gösterir."""
@@ -497,7 +577,7 @@ def render_live_chart_section(station_id, limit, station_name, sensor_obj):
             fig.update_yaxes(gridcolor="rgba(255,255,255,0.08)")
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info(f"ℹ️ '{sensor_obj['label']}' sensörü için henüz veritabanında log kaydı bulunmamaktadır.")
+            st.info(f"ℹ️ '{sensor_obj['label']}' sensörü (Kanal ID: {sensor_obj['id']}) için henüz veritabanında log kaydı bulunmamaktadır.")
 
     _draw_chart(use_date_filter)
 
@@ -523,9 +603,6 @@ def render_dashboard():
         st.session_state.role = None
         st.rerun()
 
-    if st.session_state.role == "admin":
-        render_admin_panel()
-
     st.markdown(
         "<h1>📡 SmartCam Telemetri ve Sensör İzleme Paneli</h1>",
         unsafe_allow_html=True
@@ -539,8 +616,12 @@ def render_dashboard():
         st.error(f"API sunucusuna bağlanılamadı ({API_BASE_URL}): {e}")
         stations = []
 
+    # Admin ise İstasyon & Sensör & Kullanıcı Yönetim Panelini göster
+    if st.session_state.role == "admin":
+        render_admin_management_center(stations)
+
     if not stations:
-        st.warning("Veritabanında kayıtlı istasyon bulunamadı. Lütfen backend'i çalıştırdığınızdan emin olun.")
+        st.warning("Veritabanında kayıtlı istasyon bulunamadı. Lütfen backend'i çalıştırdığınızdan veya yukarıdaki Admin Merkezinden bir istasyon eklediğinizden emin olun.")
         return
 
     # --- 1. ADIM: İSTASYON SEÇİMİ ---
@@ -585,11 +666,11 @@ def render_dashboard():
         station_sensors = []
 
     if not station_sensors:
-        st.warning("Bu istasyona tanımlanmış bağlı bir sensör bulunamadı.")
+        st.warning("Bu istasyona tanımlanmış bağlı bir sensör bulunamadı. Lütfen 'Admin Yönetim Merkezi -> Yeni Sensör Ekle' sekmesinden sensör tanımlayınız.")
         return
 
-    sensor_options = ["-- Lütfen Bir Sensör Seçiniz --"] + [f"{s['label']} ({s['default_unit']})" for s in station_sensors]
-    sensor_map = {f"{s['label']} ({s['default_unit']})": s for s in station_sensors}
+    sensor_options = ["-- Lütfen Bir Sensör Seçiniz --"] + [f"{s['label']} (Kanal ID: {s['id']} | {s['default_unit']})" for s in station_sensors]
+    sensor_map = {f"{s['label']} (Kanal ID: {s['id']} | {s['default_unit']})": s for s in station_sensors}
 
     selected_sn_str = st.selectbox("🌡️ Analiz Edilecek Sensör:", sensor_options, key=f"sensor_select_{station_id}")
 
