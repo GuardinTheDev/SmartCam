@@ -53,10 +53,40 @@ class LoginRequest(BaseModel):
 class RegisterRequest(BaseModel):
     username: str
     password: str
+    full_name: str
+    email: str
+    phone: str
+    kvkk_approved: bool
 
 class UserApprovalRequest(BaseModel):
     user_id: int
     action: str  # 'approve' veya 'reject'
+
+def validate_password_strength(password: str, username: str = "", full_name: str = ""):
+    if len(password) < 6:
+        return False, "Şifre en az 6 karakter uzunluğunda olmalıdır!"
+    
+    has_letter = any(c.isalpha() for c in password)
+    has_digit = any(c.isdigit() for c in password)
+    if not (has_letter and has_digit):
+        return False, "Şifre en az bir harf ve bir rakam içermelidir (Örn: Smart123)!"
+
+    weak_patterns = ["123", "321", "abc", "qwerty", "admin", "password", "sifre"]
+    user_lower = username.lower().strip() if username else ""
+    full_lower = full_name.lower().replace(" ", "").strip() if full_name else ""
+    pass_lower = password.lower().strip()
+
+    if user_lower and user_lower in pass_lower:
+        return False, f"Şifreniz kullanıcı adınızı ('{username}') içeremez! 'ad123' gibi basit şifreler yasaktır."
+
+    if full_lower and full_lower in pass_lower:
+        return False, "Şifreniz adınızı veya soyadınızı içeremez."
+
+    for pattern in weak_patterns:
+        if pass_lower == f"{user_lower}{pattern}" or pass_lower == f"{pattern}{user_lower}" or pass_lower == pattern:
+            return False, f"Şifreniz '{pattern}' gibi çok basit kalıplar içeremez."
+
+    return True, "Şifre güçlü."
 
 class StationCreateRequest(BaseModel):
     category_id: int
@@ -99,16 +129,24 @@ async def receive_device_data(payload: IoTDataPayload):
 # --- 2. KULLANICI KAYIT OLMA (REGISTER - AKILLI VE ESNEK KAYIT) ---
 @app.post("/api/auth/register")
 async def register_user(credentials: RegisterRequest):
+    # 1. KVKK Onay Kontrolü
+    if not credentials.kvkk_approved:
+        raise HTTPException(status_code=400, detail="Kayıt olmak için KVKK Aydınlatma Metni'ni onaylamanız gerekmektedir!")
+
+    # 2. Güçlü Şifre Kontrolü
+    is_strong, msg = validate_password_strength(credentials.password, credentials.username, credentials.full_name)
+    if not is_strong:
+        raise HTTPException(status_code=400, detail=msg)
+
     conn = database.get_db_connection()
     cursor = conn.cursor()
     
-    # 1. Önce bu kullanıcı adı daha önce alınmış mı bakalım
+    # 3. Önce bu kullanıcı adı daha önce alınmış mı bakalım
     cursor.execute("SELECT id, status FROM users WHERE username = ?", (credentials.username,))
     existing_user = cursor.fetchone()
     
     if existing_user:
         user_dict = dict(existing_user)
-        # Eğer eski kayıt 'rejected' (reddedilmiş) ise, eskiyi silip yenisine izin ver!
         if user_dict["status"] == "rejected":
             cursor.execute("DELETE FROM users WHERE id = ?", (user_dict["id"],))
         else:
@@ -117,34 +155,51 @@ async def register_user(credentials: RegisterRequest):
             
     try:
         cursor.execute(
-            "INSERT INTO users (username, password, role, status) VALUES (?, ?, 'user', 'pending')", 
-            (credentials.username, credentials.password)
+            '''INSERT INTO users 
+               (username, password, full_name, email, phone, kvkk_approved, role, status) 
+               VALUES (?, ?, ?, ?, ?, ?, 'user', 'pending')''', 
+            (
+                credentials.username, 
+                credentials.password, 
+                credentials.full_name, 
+                credentials.email, 
+                credentials.phone, 
+                1 if credentials.kvkk_approved else 0
+            )
         )
         conn.commit()
         conn.close()
         return {
             "status": "success", 
-            "message": f"Kayıt isteğiniz alındı! '{credentials.username}' kullanıcısı Admin onayı bekliyor."
+            "message": f"Kayıt isteğiniz alındı! '{credentials.username}' ({credentials.full_name}) kullanıcısı Admin onayı bekliyor."
         }
     except sqlite3.IntegrityError:
         conn.close()
         raise HTTPException(status_code=400, detail="Bu kullanıcı adı zaten alınmış!")
 
 
-# --- 3. KULLANICI GİRİŞİ (LOGIN - ONAYLI MI KONTROL EDER) ---
+# --- 3. KULLANICI GİRİŞİ (LOGIN - KULLANICI ADI, E-POSTA, TELEFON VEYA AD SOYAD İLE) ---
 @app.post("/api/auth/login")
 async def login(credentials: LoginRequest):
     conn = database.get_db_connection()
     cursor = conn.cursor()
+    
+    identifier = credentials.username.strip()
+    clean_phone = identifier.replace(" ", "")
     cursor.execute(
-        "SELECT * FROM users WHERE username = ? AND password = ?", 
-        (credentials.username, credentials.password)
+        '''SELECT * FROM users 
+           WHERE (LOWER(TRIM(username)) = LOWER(?) 
+                  OR LOWER(TRIM(email)) = LOWER(?) 
+                  OR REPLACE(phone, ' ', '') = ? 
+                  OR LOWER(TRIM(full_name)) = LOWER(?)) 
+             AND password = ?''', 
+        (identifier, identifier, clean_phone, identifier, credentials.password)
     )
     user = cursor.fetchone()
     conn.close()
     
     if not user:
-        raise HTTPException(status_code=401, detail="Hatalı kullanıcı adı veya şifre!")
+        raise HTTPException(status_code=401, detail="Hatalı kullanıcı bilgisi veya şifre!")
     
     user_dict = dict(user)
     
@@ -167,7 +222,7 @@ async def login(credentials: LoginRequest):
 async def get_pending_users():
     conn = database.get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, username, role, status, created_at FROM users WHERE status = 'pending'")
+    cursor.execute("SELECT id, username, full_name, email, phone, role, status, created_at FROM users WHERE status = 'pending'")
     pending_users = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return pending_users

@@ -241,14 +241,14 @@ def render_auth_page():
         with tab_login:
             with st.form("login_form", clear_on_submit=False):
                 st.subheader("Kullanıcı Girişi")
-                login_user = st.text_input("Kullanıcı Adı", key="login_user", placeholder="kullanici_adi")
+                login_user = st.text_input("Kullanıcı Adı / E-Posta / Telefon / Ad Soyad", key="login_user", placeholder="kullanıcı adı, e-posta veya telefon")
                 login_pass = st.text_input("Şifre", type="password", key="login_pass", placeholder="••••••••")
                 
                 submitted = st.form_submit_button("Giriş Yap", type="primary")
 
                 if submitted:
                     if not login_user or not login_pass:
-                        st.warning("Lütfen kullanıcı adı ve şifre alanlarını doldurunuz.")
+                        st.warning("Lütfen kullanıcı bilgisi ve şifre alanlarını doldurunuz.")
                     else:
                         try:
                             res = requests.post(
@@ -275,29 +275,60 @@ def render_auth_page():
         with tab_register:
             with st.form("register_form", clear_on_submit=False):
                 st.subheader("Yeni Kullanıcı Kaydı")
+                reg_fullname = st.text_input("Ad Soyad", key="reg_fullname", placeholder="Ahmet Yılmaz")
                 reg_user = st.text_input("Kullanıcı Adı", key="reg_user", placeholder="kullanici_adi")
-                reg_pass = st.text_input("Şifre", type="password", key="reg_pass", placeholder="••••••••")
                 
-                reg_submitted = st.form_submit_button("Kayıt Oluştur")
+                col_em, col_ph = st.columns(2)
+                with col_em:
+                    reg_email = st.text_input("E-Posta Adresi", key="reg_email", placeholder="ornek@email.com")
+                with col_ph:
+                    reg_phone = st.text_input("Telefon Numarası", key="reg_phone", placeholder="0555 123 4567")
+
+                reg_pass = st.text_input("Şifre", type="password", key="reg_pass", placeholder="En az 6 karakter, harf ve rakam (Örn: Xk9#mP2)")
+                reg_pass_confirm = st.text_input("Şifre Tekrar", type="password", key="reg_pass_confirm", placeholder="••••••••")
+                
+                with st.expander("📄 KVKK Aydınlatma Metni"):
+                    st.caption(
+                        "SmartCam Telemetri Sistemi kapsamında kişisel verileriniz (Ad Soyad, E-Posta, Telefon) "
+                        "6698 sayılı KVKK gereğince yalnızca sistem erişim yetkilendirmesi, onay süreçleri ve güvenlik "
+                        "doğrulaması amacıyla işlenmektedir. Verileriniz 3. şahıslarla paylaşılmaz."
+                    )
+
+                reg_kvkk = st.checkbox("KVKK Aydınlatma Metni'ni okudum ve kabul ediyorum.", key="reg_kvkk")
+                
+                st.caption("⚠️ Şifre 'ad123' gibi basit olmamalı; en az 6 karakter, harf ve rakam içermelidir.")
+                reg_submitted = st.form_submit_button("Kayıt Başvurusu Yap", type="primary")
 
                 if reg_submitted:
-                    if reg_user and reg_pass:
+                    if not (reg_fullname and reg_user and reg_email and reg_phone and reg_pass and reg_pass_confirm):
+                        st.warning("⚠️ Lütfen tüm alanları eksiksiz doldurunuz.")
+                    elif reg_pass != reg_pass_confirm:
+                        st.error("❌ Şifreler birbiriyle eşleşmiyor!")
+                    elif not reg_kvkk:
+                        st.warning("⚠️ Kayıt oluşturabilmek için KVKK Aydınlatma Metni'ni kabul etmelisiniz.")
+                    else:
                         try:
                             res = requests.post(
                                 f"{API_BASE_URL}/auth/register",
-                                json={"username": reg_user, "password": reg_pass},
+                                json={
+                                    "username": reg_user,
+                                    "password": reg_pass,
+                                    "full_name": reg_fullname,
+                                    "email": reg_email,
+                                    "phone": reg_phone,
+                                    "kvkk_approved": reg_kvkk
+                                },
                                 timeout=5
                             )
                             if res.status_code in [200, 201]:
-                                st.success("✅ Kayıt başarılı! Hesabınız admin onayına gönderildi.")
+                                st.success("✅ Kayıt başvurunuz alındı! Hesabınız Admin onayına gönderildi.")
                             else:
-                                st.error("❌ Kayıt oluşturulamadı. Bu kullanıcı adı alınmış olabilir.")
+                                err_msg = res.json().get("detail", "Kayıt oluşturulamadı.")
+                                st.error(f"❌ {err_msg}")
                         except requests.exceptions.ConnectionError:
                             st.error("❌ API sunucusuna bağlanılamadı!")
                         except Exception as e:
                             st.error(f"Kayıt sırasında bir hata oluştu: {e}")
-                    else:
-                        st.warning("Lütfen tüm alanları doldurunuz.")
 
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -320,8 +351,14 @@ def render_admin_panel():
                 for user in pending_users:
                     u_id = user.get("id") or user.get("user_id")
                     u_name = user.get("username") or user.get("name") or f"Kullanıcı #{u_id}"
+                    full_name = user.get("full_name") or ""
+                    email = user.get("email") or ""
+                    phone = user.get("phone") or ""
                     
-                    st.sidebar.markdown(f"**👤 {u_name}** `(ID: {u_id})`")
+                    st.sidebar.markdown(f"**👤 {u_name}** ({full_name}) `ID: {u_id}`")
+                    if email or phone:
+                        st.sidebar.caption(f"📧 {email} | 📞 {phone}")
+
                     col_btn1, col_btn2 = st.sidebar.columns(2)
                     
                     if col_btn1.button("✅ Onayla", key=f"app_{u_id}", use_container_width=True):
@@ -329,7 +366,7 @@ def render_admin_panel():
                             f"{API_BASE_URL}/admin/approve-user",
                             json={"user_id": u_id, "action": "approve"}
                         )
-                        st.toast(f"{u_name} başarıyla onaylandı!", icon="✅")
+                        st.toast(f"{u_name} ({full_name}) başarıyla onaylandı!", icon="✅")
                         st.rerun()
                         
                     if col_btn2.button("❌ Reddet", key=f"rej_{u_id}", use_container_width=True):
