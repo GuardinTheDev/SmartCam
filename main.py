@@ -96,6 +96,7 @@ class StationCreateRequest(BaseModel):
     device_type: Optional[str] = "Gateway"
 
 class SensorCreateRequest(BaseModel):
+    id: Optional[int] = None                        # Cihazın sensorData anahtarı (Kanal ID) olarak göndereceği numara
     station_id: int
     label: str                                      
     sequence_number: Optional[int] = None          
@@ -241,7 +242,6 @@ async def approve_or_reject_user(req: UserApprovalRequest):
         cursor.execute("UPDATE users SET status = 'approved' WHERE id = ?", (req.user_id,))
         action_text = "onaylandı"
     else:
-        # REDDEDİLİNCE TABLODAN SİL (Böylece aynı isimle tekrar kaydolunabilir)
         cursor.execute("DELETE FROM users WHERE id = ?", (req.user_id,))
         action_text = "reddedildi ve sistemden silindi"
         
@@ -264,6 +264,17 @@ async def get_stations():
     stations = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return stations
+
+
+# --- 6.1 ARAYÜZ İÇİN KATEGORİ LİSTESİ ---
+@app.get("/api/station-categories")
+async def get_station_categories():
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name FROM station_categories ORDER BY id ASC")
+    categories = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return categories
 
 
 @app.get("/api/stations/{station_id}/sensors")
@@ -297,7 +308,7 @@ async def create_station(station: StationCreateRequest):
     conn = database.get_db_connection()
     cursor = conn.cursor()
     
-    auto_security_code = database.generate_secure_token()
+    auto_security_code = database.generate_secure_token()[:16]  # 16 haneli okunaklı token
     
     # Otomatik Hashlenmiş IMEI Üretimi (Eğer dışarıdan IMEI gönderilmediyse)
     final_imei = station.imei
@@ -322,6 +333,7 @@ async def create_station(station: StationCreateRequest):
         
         new_station_id = cursor.lastrowid
         
+        # İstasyon eklenirken başlangıçta 3 temel sensör otomatik tanımlanır
         default_sensors = [
             (new_station_id, 1, "Sıcaklık", 101, "temperature", "celsius", 0),
             (new_station_id, 2, "Su Seviyesi", 102, "level", "cm", 0),
@@ -338,9 +350,10 @@ async def create_station(station: StationCreateRequest):
         
         return {
             "status": "success", 
-            "message": f"'{station.name}' istasyonu ve varsayılan sensörleri oluşturuldu.",
+            "message": f"'{station.name}' istasyonu ve varsayılan sensörleri başarıyla oluşturuldu.",
             "station_id": new_station_id,
-            "generated_security_code": auto_security_code
+            "generated_security_code": auto_security_code,
+            "imei": final_imei
         }
         
     except sqlite3.IntegrityError:
@@ -366,47 +379,56 @@ async def create_sensor(sensor: SensorCreateRequest):
         seq_num = cursor.fetchone()[0]
         
     try:
-        cursor.execute('''
-            INSERT INTO sensors (station_id, sequence_number, label, channel_category_id, unit_type, default_unit, default_value)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            sensor.station_id,
-            seq_num,
-            sensor.label,
-            sensor.channel_category_id,
-            sensor.unit_type,
-            sensor.default_unit,
-            sensor.default_value
-        ))
-        
-        new_sensor_id = cursor.lastrowid
+        if sensor.id is not None:
+            # Kullanıcının belirlediği özel Kanal ID (sensorData anahtarı) ile kaydet
+            cursor.execute('''
+                INSERT INTO sensors (id, station_id, sequence_number, label, channel_category_id, unit_type, default_unit, default_value)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                sensor.id,
+                sensor.station_id,
+                seq_num,
+                sensor.label,
+                sensor.channel_category_id,
+                sensor.unit_type,
+                sensor.default_unit,
+                sensor.default_value
+            ))
+            new_sensor_id = sensor.id
+        else:
+            # Otomatik veritabanı id'si ile kaydet
+            cursor.execute('''
+                INSERT INTO sensors (station_id, sequence_number, label, channel_category_id, unit_type, default_unit, default_value)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                sensor.station_id,
+                seq_num,
+                sensor.label,
+                sensor.channel_category_id,
+                sensor.unit_type,
+                sensor.default_unit,
+                sensor.default_value
+            ))
+            new_sensor_id = cursor.lastrowid
+            
         conn.commit()
         conn.close()
         
         return {
             "status": "success",
-            "message": f"'{sensor.label}' sensörü Sıra No: {seq_num} olarak otomatik eklendi.",
+            "message": f"'{sensor.label}' sensörü başarıyla eklendi.",
             "sensor_id": new_sensor_id,
             "assigned_sequence_number": seq_num
         }
+    except sqlite3.IntegrityError:
+        conn.close()
+        raise HTTPException(
+            status_code=400,
+            detail=f"Belirtilen Kanal ID ({sensor.id}) bu veritabanında zaten başka bir sensör tarafından kullanılıyor!"
+        )
     except Exception as e:
         conn.close()
         raise HTTPException(status_code=500, detail=f"Sensör ekleme hatası: {str(e)}")
-
-
-# --- 10. İSTASYONA AİT SENSÖRLERİ LİSTELEME ---
-@app.get("/api/stations/{station_id}/sensors")
-async def get_station_sensors(station_id: int):
-    conn = database.get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT * FROM sensors 
-        WHERE station_id = ? 
-        ORDER BY sequence_number ASC
-    ''', (station_id,))
-    sensors = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    return sensors
 
 
 if __name__ == "__main__":
