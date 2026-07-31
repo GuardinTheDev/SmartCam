@@ -19,7 +19,6 @@ def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # ESKİ ŞEMA TEMİZLİĞİ: Eğer eski sensor_logs tablosu varsa otomatik yenile
     cursor.execute("PRAGMA table_info(sensor_logs)")
     cols = [row['name'] if isinstance(row, sqlite3.Row) else row[1] for row in cursor.fetchall()]
     if cols and "station_id" not in cols:
@@ -72,7 +71,7 @@ def init_db():
             FOREIGN KEY (station_id) REFERENCES stations(id)
         )
     ''')
-
+    
     # 4. Sensör Ölçüm Logları Tablosu
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS sensor_logs (
