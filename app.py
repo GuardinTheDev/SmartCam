@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 import plotly.express as px
+import time as pytime
 from datetime import datetime, time
 
 # ---------------------------------------------------------
@@ -218,6 +219,113 @@ def get_status_indicator(value, thresholds=(50, 20)):
     else:
         return f"🔴 %{val} (Düşük)"
 
+def format_relative_time(dt_input):
+    """
+    Tarih/zaman değerini göreceli formata dönüştürür:
+    - 1 dakikadan az: 'Az önce'
+    - 1 saatten az: 'X dakika önce'
+    - 1 günden az: 'X saat önce'
+    - 1 aydan (30 gün) az: 'X gün önce'
+    - 1 yıldan (365 gün) az: 'X ay önce'
+    - 1 yıldan fazla: Tam tarih ('DD.MM.YYYY HH:MM')
+    """
+    if not dt_input or dt_input == "N/A":
+        return "Az önce"
+
+    try:
+        if isinstance(dt_input, str):
+            clean_str = dt_input.replace("Z", "").replace("T", " ")
+            dt_obj = datetime.fromisoformat(clean_str)
+        elif isinstance(dt_input, datetime):
+            dt_obj = dt_input
+        else:
+            return str(dt_input)
+
+        now = datetime.now()
+        diff = now - dt_obj
+        seconds = int(diff.total_seconds())
+
+        if seconds < 0 or seconds < 60:
+            return "Az önce"
+
+        minutes = seconds // 60
+        hours = minutes // 60
+        days = hours // 24
+        months = days // 30
+        years = days // 365
+
+        if minutes < 60:
+            return f"{minutes} dakika önce"
+        elif hours < 24:
+            return f"{hours} saat önce"
+        elif days < 30:
+            return f"{days} gün önce"
+        elif months < 12:
+            return f"{months} ay önce"
+        else:
+            return dt_obj.strftime("%d.%m.%Y %H:%M")
+    except Exception:
+        return str(dt_input)
+
+
+def check_persistent_session():
+    """1 saatlik oturum süresini ve query_params/localStorage senkronizasyonunu kontrol eder."""
+    current_time = pytime.time()
+    
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+    if "username" not in st.session_state:
+        st.session_state.username = None
+    if "role" not in st.session_state:
+        st.session_state.role = None
+
+    # 1. Query Params üzerinden oturum kontrolü (F5 yenilemelerinde otomatik koruma)
+    if not st.session_state.authenticated:
+        q_user = st.query_params.get("session_user")
+        q_role = st.query_params.get("session_role")
+        q_exp = st.query_params.get("session_exp")
+
+        if q_user and q_role and q_exp:
+            try:
+                exp_ts = float(q_exp)
+                if current_time < exp_ts:
+                    st.session_state.authenticated = True
+                    st.session_state.username = q_user
+                    st.session_state.role = q_role
+                else:
+                    # 1 saatlik süre dolmuş!
+                    st.query_params.clear()
+                    st.session_state.authenticated = False
+            except Exception:
+                st.query_params.clear()
+
+    # 2. Browser LocalStorage ile otomatik senkronizasyon JS
+    st.components.v1.html("""
+        <script>
+        (function() {
+            const parentWin = window.parent;
+            const savedSession = parentWin.localStorage.getItem('smartcam_user_session');
+            if (savedSession) {
+                try {
+                    const data = JSON.parse(savedSession);
+                    const now = Date.now();
+                    if (data.expires_at > now) {
+                        const url = new URL(parentWin.location.href);
+                        if (!url.searchParams.has('session_user')) {
+                            url.searchParams.set('session_user', data.username);
+                            url.searchParams.set('session_role', data.role);
+                            url.searchParams.set('session_exp', (data.expires_at / 1000).toString());
+                            parentWin.location.href = url.href;
+                        }
+                    } else {
+                        parentWin.localStorage.removeItem('smartcam_user_session');
+                    }
+                } catch(e) {}
+            }
+        })();
+        </script>
+    """, height=0)
+
 
 # ---------------------------------------------------------
 # 3. GİRİŞ VE KAYIT EKRANI
@@ -258,9 +366,30 @@ def render_auth_page():
                             )
                             if res.status_code == 200:
                                 data = res.json()
+                                username_val = data.get("username", login_user)
+                                role_val = data.get("role", "user")
+                                exp_time = pytime.time() + 3600  # 1 Saatlik (60 dk) Oturum Süresi
+
                                 st.session_state.authenticated = True
-                                st.session_state.username = data.get("username", login_user)
-                                st.session_state.role = data.get("role", "user")
+                                st.session_state.username = username_val
+                                st.session_state.role = role_val
+
+                                # 1 saatlik oturumu URL query_params'a yaz
+                                st.query_params["session_user"] = username_val
+                                st.query_params["session_role"] = role_val
+                                st.query_params["session_exp"] = str(exp_time)
+
+                                # Browser localStorage'a 1 saatlik oturumu kaydet
+                                st.components.v1.html(f"""
+                                    <script>
+                                    window.parent.localStorage.setItem('smartcam_user_session', JSON.stringify({{
+                                        username: "{username_val}",
+                                        role: "{role_val}",
+                                        expires_at: {int(exp_time * 1000)}
+                                    }}));
+                                    </script>
+                                """, height=0)
+
                                 st.success("Giriş başarılı!")
                                 st.rerun()
                             elif res.status_code == 403:
@@ -536,8 +665,10 @@ def render_live_chart_section(station_id, limit, station_name, sensor_obj):
         # Son Okunan Canlı Ölçüm Metriğini Göster
         if filtered_logs:
             latest_val = filtered_logs[0].get("raw_value", 0)
+            latest_time = filtered_logs[0].get("recorded_at")
+            rel_time_str = format_relative_time(latest_time)
             st.metric(
-                label=f"⚡ Son Okunan Canlı {sensor_obj['label']} Değeri",
+                label=f"⚡ Son Okunan Canlı {sensor_obj['label']} Değeri ({rel_time_str})",
                 value=f"{latest_val} {sensor_obj.get('default_unit', '')}"
             )
 
@@ -601,6 +732,12 @@ def render_dashboard():
         st.session_state.authenticated = False
         st.session_state.username = None
         st.session_state.role = None
+        st.query_params.clear()
+        st.components.v1.html("""
+            <script>
+            window.parent.localStorage.removeItem('smartcam_user_session');
+            </script>
+        """, height=0)
         st.rerun()
 
     st.markdown(
@@ -645,7 +782,10 @@ def render_dashboard():
     c1.metric("İstasyon Adı", selected_station.get("name", "N/A"))
     c2.metric("IP Adresi", selected_station.get("gsm_ip") or "192.168.1.100")
     c3.metric("IMEI No", selected_station.get("imei", "N/A"))
-    c4.metric("Son Güncelleme", selected_station.get("updated_at", "N/A"))
+    
+    raw_updated = selected_station.get("updated_at")
+    rel_updated = format_relative_time(raw_updated)
+    c4.metric("Son Güncelleme", rel_updated)
 
     m1, m2, m3 = st.columns(3)
     acc_val = selected_station.get("battery_percent", 0)
@@ -694,6 +834,7 @@ def render_dashboard():
 # ---------------------------------------------------------
 def main():
     inject_custom_css()
+    check_persistent_session()
     if not st.session_state.authenticated:
         render_auth_page()
     else:
