@@ -266,6 +266,16 @@ async def get_stations():
     return stations
 
 
+@app.get("/api/stations/{station_id}/sensors")
+async def get_station_sensors(station_id: int):
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM sensors WHERE station_id = ? ORDER BY sequence_number ASC", (station_id,))
+    sensors = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return sensors
+
+
 # --- 7. ARAYÜZ İÇİN GRAFİK VERİSİ ---
 @app.get("/api/sensor/history")
 async def get_sensor_history(station_id: int = 1, limit: int = 50):

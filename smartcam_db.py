@@ -116,15 +116,36 @@ def init_db():
         VALUES ('admin', 'admin123', 'admin', 'approved')
     ''')
     
-    # Örnek İstasyon
+    # 1. Örnek İstasyon (Baraj)
     cursor.execute('''
-        INSERT OR IGNORE INTO stations (category_id, name, security_code, imei, phone_number, gsm_ip, device_type)
-        VALUES (1, 'Baraj İstasyonu 1', 'zwx9x5PcMl', '861234567890123', '05551112233', '192.168.1.100', 'Gateway')
+        INSERT OR IGNORE INTO stations (id, category_id, name, security_code, imei, phone_number, gsm_ip, device_type, battery_percent, gsm_percent)
+        VALUES (1, 1, 'Baraj İstasyonu 1', 'zwx9x5PcMl', '861234567890123', '05551112233', '192.168.1.100', 'Gateway', 95, 80)
     ''')
+
+    # 2. Örnek İstasyon (Meteoroloji)
+    cursor.execute('''
+        INSERT OR IGNORE INTO stations (id, category_id, name, security_code, imei, phone_number, gsm_ip, device_type, battery_percent, gsm_percent)
+        VALUES (2, 2, 'Meteoroloji İstasyonu A', 'sec998877665544', '869876543210987', '05559998877', '192.168.1.101', 'IoT Node', 88, 90)
+    ''')
+
+    # Sensör Tohumlama (Seed)
+    default_sensors = [
+        (1, 1, "Sıcaklık", 101, "temperature", "celsius", 24.5),
+        (2, 1, "Su Seviyesi", 102, "level", "cm", 150.0),
+        (3, 1, "Basınç / Debi", 103, "pressure", "bar", 3.2),
+        (4, 2, "Rüzgar Hızı", 104, "speed", "km/h", 18.5),
+        (5, 2, "Ortam Nemi", 105, "humidity", "%", 62.0),
+        (6, 2, "Güneş Radyasyonu", 106, "radiation", "W/m²", 450.0)
+    ]
+    for s_id, st_id, lbl, cat, u_type, u_unit, d_val in default_sensors:
+        cursor.execute('''
+            INSERT OR IGNORE INTO sensors (id, station_id, sequence_number, label, channel_category_id, unit_type, default_unit, default_value)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (s_id, st_id, s_id, lbl, cat, u_type, u_unit, d_val))
 
     conn.commit()
     conn.close()
-    print("Veritabanı tabloları başarıyla güncellendi ve hazırlandı.")
+    print("Veritabanı tabloları ve 2 örnek istasyon başarıyla güncellendi.")
 
 def verify_station(security_code: str, imei: str):
     """Gelen paketteki güvenlik kodu ve IMEI veritabanında var mı kontrol eder."""
