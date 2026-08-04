@@ -4,28 +4,31 @@ import hashlib
 
 DB_NAME = "sensor_data.db"
 
+
 def get_db_connection():
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     return conn
+
 
 def generate_secure_token() -> str:
     """128 karakter uzunluğunda benzersiz SHA-512 Hash üretir."""
     random_bytes = secrets.token_bytes(64)
     return hashlib.sha512(random_bytes).hexdigest()
 
+
 def init_db():
     """Veritabanını ve tüm gerekli ilişkisel tabloları oluşturur."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     cursor.execute("PRAGMA table_info(sensor_logs)")
     cols = [row['name'] if isinstance(row, sqlite3.Row) else row[1] for row in cursor.fetchall()]
     if cols and "station_id" not in cols:
         cursor.execute("DROP TABLE sensor_logs")
         cursor.execute("DROP TABLE IF EXISTS device_logs")
         conn.commit()
-    
+
     # 1. İstasyon Kategorileri Tablosu
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS station_categories (
@@ -33,7 +36,7 @@ def init_db():
             name TEXT UNIQUE NOT NULL
         )
     ''')
-    
+
     categories = ['Akarsu', 'Baraj', 'Gateway', 'Yeraltı Suyu']
     for cat in categories:
         cursor.execute("INSERT OR IGNORE INTO station_categories (name) VALUES (?)", (cat,))
@@ -71,7 +74,7 @@ def init_db():
             FOREIGN KEY (station_id) REFERENCES stations(id)
         )
     ''')
-    
+
     # 4. Sensör Ölçüm Logları Tablosu
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS sensor_logs (
@@ -85,7 +88,7 @@ def init_db():
         )
     ''')
 
-    # 5. Kullanıcılar Tablosu (Ad Soyad, E-Posta, Telefon ve KVKK Alanları Eklendi)
+    # 5. Kullanıcılar Tablosu
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,13 +112,13 @@ def init_db():
         for col_name, col_type in new_cols.items():
             if col_name not in user_cols:
                 cursor.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}")
-    
+
     # Varsayılan Admin Kullanıcısı
     cursor.execute('''
-        INSERT OR IGNORE INTO users (username, password, role, status) 
+        INSERT OR IGNORE INTO users (username, password, role, status)
         VALUES ('admin', 'admin123', 'admin', 'approved')
     ''')
-    
+
     # 1. Örnek İstasyon (Baraj)
     cursor.execute('''
         INSERT OR IGNORE INTO stations (id, category_id, name, security_code, imei, phone_number, gsm_ip, device_type, battery_percent, gsm_percent)
@@ -145,51 +148,53 @@ def init_db():
 
     conn.commit()
     conn.close()
-    print("Veritabanı tabloları ve 2 örnek istasyon başarıyla güncellendi.")
+    print("Veritabanı tabloları ve örnek istasyon verileri kontrol edildi/hazırlandı.")
+
 
 def verify_station(security_code: str, imei: str):
     """Gelen paketteki güvenlik kodu ve IMEI veritabanında var mı kontrol eder."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT * FROM stations WHERE security_code = ? AND imei = ?", 
+        "SELECT * FROM stations WHERE security_code = ? AND imei = ?",
         (security_code, imei)
     )
     station = cursor.fetchone()
     conn.close()
     return dict(station) if station else None
 
+
 def process_valid_payload(station_id: int, payload: dict):
     """Doğrulanmış paket verilerini işler."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     update_fields = []
     update_values = []
-    
+
     if "accumulatorPercent" in payload and isinstance(payload["accumulatorPercent"], (int, float)):
         update_fields.append("battery_percent = ?")
         update_values.append(payload["accumulatorPercent"])
-        
+
     if "gsmSignalPercent" in payload and str(payload["gsmSignalPercent"]).isdigit():
         update_fields.append("gsm_percent = ?")
         update_values.append(int(payload["gsmSignalPercent"]))
-        
+
     if "ip" in payload and payload["ip"]:
         update_fields.append("gsm_ip = ?")
         update_values.append(payload["ip"])
-        
+
     if "tVer" in payload and payload["tVer"]:
         update_fields.append("software_version = ?")
         update_values.append(payload["tVer"])
-        
+
     update_fields.append("updated_at = CURRENT_TIMESTAMP")
-    
+
     if update_fields:
         sql_query = f"UPDATE stations SET {', '.join(update_fields)} WHERE id = ?"
         update_values.append(station_id)
         cursor.execute(sql_query, update_values)
-    
+
     sensor_data = payload.get("sensorData", {})
     for sensor_key, sensor_arr in sensor_data.items():
         if isinstance(sensor_arr, list) and len(sensor_arr) > 5:
