@@ -66,3 +66,14 @@ class SensorLog(Base):
 
     station = relationship("Station", back_populates="logs")
     sensor = relationship("Sensor", back_populates="logs")
+
+class PendingRequest(Base):
+    __tablename__ = "pending_requests"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    user_username = Column(String(100), nullable=False)
+    request_type = Column(String(50), nullable=False)  # "station" veya "sensor"
+    title = Column(String(150), nullable=False)
+    details = Column(String(500), nullable=True)
+    status = Column(String(50), default="pending")     # "pending", "approved", "rejected"
+    created_at = Column(DateTime, default=datetime.utcnow)
