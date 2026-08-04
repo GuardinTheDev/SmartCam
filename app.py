@@ -149,15 +149,26 @@ def inject_custom_css():
         }
 
         /* ---- Input alanları ---- */
-        .stTextInput input, .stNumberInput input {
-            background: rgba(255,255,255,0.04) !important;
-            border: 1px solid rgba(255,255,255,0.12) !important;
+        .stTextInput input, .stNumberInput input, div[data-baseweb="input"] input {
+            background-color: #1e293b !important;
+            border: 1px solid rgba(255,255,255,0.2) !important;
             border-radius: 10px !important;
-            color: #f0f4fb !important;
+            color: #ffffff !important;
+            -webkit-text-fill-color: #ffffff !important;
+            font-weight: 500 !important;
         }
-        .stTextInput input:focus, .stNumberInput input:focus {
+        .stTextInput input:focus, .stNumberInput input:focus, div[data-baseweb="input"] input:focus {
             border-color: #3b82f6 !important;
-            box-shadow: 0 0 0 2px rgba(59,130,246,0.25) !important;
+            box-shadow: 0 0 0 2px rgba(59,130,246,0.35) !important;
+            background-color: #1e293b !important;
+        }
+        /* Otomatik doldurma (Autofill) renk düzeltmesi */
+        input:-webkit-autofill,
+        input:-webkit-autofill:hover, 
+        input:-webkit-autofill:focus {
+            -webkit-text-fill-color: #ffffff !important;
+            -webkit-box-shadow: 0 0 0px 1000px #1e293b inset !important;
+            transition: background-color 5000s ease-in-out 0s;
         }
 
         /* ---- Bilgi/uyarı kutuları ---- */
