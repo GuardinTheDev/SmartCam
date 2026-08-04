@@ -6,6 +6,7 @@ import random
 API_URL = "http://127.0.0.1:8000/api/device/data"
 
 # Test için veritabanında kayıtlı olan İstasyon Güvenlik Kodu ve IMEI
+# NOT: Arayüz üzerinden yeni istasyon eklerseniz buradaki SECURITY_CODE ve IMEI'yi onunla değiştirebilirsiniz.
 SECURITY_CODE = "zwx9x5PcMl"
 IMEI = "861234567890123"
 
@@ -32,8 +33,10 @@ def generate_telemetry_payload(is_valid: bool = True):
         "imei": IMEI,
         "jVer": "1.0",
         "sensorData": {
+            # "1", "2" veya arayüzden eklediğiniz yeni Sensör Kanal ID'leri burada yer alır
             "1": ["0", "0", "0", "0", str(int(time.time())), str(round(random.uniform(20.0, 25.5), 2)), "0", "85", "90", "[21,22,23]"],
-            "2": ["0", "0", "0", "0", str(int(time.time())), str(round(random.uniform(100.0, 150.0), 2)), "0", "85", "90", "[120,130]"]
+            "2": ["0", "0", "0", "0", str(int(time.time())), str(round(random.uniform(100.0, 150.0), 2)), "0", "85", "90", "[120,130]"],
+            "3": ["0", "0", "0", "0", str(int(time.time())), str(round(random.uniform(2.5, 4.0), 2)), "0", "85", "90", "[3.1,3.2]"]
         }
     }
 
