@@ -388,8 +388,36 @@ def render_dashboard():
                 if logs:
                     df = pd.DataFrame(logs)
                     st.metric(f"⚡ Canlı {sel_sn['label']} Değeri ({format_relative_time(logs[0].get('recorded_at'))})", f"{logs[0].get('raw_value')} {sel_sn['default_unit']}")
-                    fig = px.line(df, x="recorded_at", y="raw_value", title=f"{sel_st['name']} — {sel_sn['label']} Ölçüm Grafiği")
-                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Zoom/Seçim revizyon anahtarı
+                    ver_key = f"zoom_ver_{sel_st['id']}_{sel_sn['id']}"
+                    if ver_key not in st.session_state:
+                        st.session_state[ver_key] = 0
+
+                    # Grafiğin üstüne başlık ve Türkçe "Grafiği Sıfırla" butonu koyuyoruz
+                    c_title, c_rst = st.columns([4, 1.2])
+                    with c_title:
+                        st.markdown(f"#### 📈 {sel_st['name']} — {sel_sn['label']} Ölçüm Grafiği")
+                    with c_rst:
+                        if st.button("🔄 Grafiği Sıfırla", key=f"reset_btn_{sel_st['id']}_{sel_sn['id']}", help="Yakınlaştırmayı sıfırlar ve tam boyuta döner"):
+                            st.session_state[ver_key] += 1
+                            st.rerun()
+
+                    fig = px.line(df, x="recorded_at", y="raw_value")
+                    
+                    # 📌 uirevision ve yatay-only (X ekseni) zoom kısıtlaması
+                    fig.update_layout(
+                        uirevision=f"sensor_{sel_st['id']}_{sel_sn['id']}_{st.session_state[ver_key]}",
+                        xaxis=dict(title="Zaman (recorded_at)", fixedrange=False),
+                        yaxis=dict(title=f"Ölçüm ({sel_sn['default_unit']})", fixedrange=True),
+                        margin=dict(l=10, r=10, t=10, b=10)
+                    )
+                    
+                    st.plotly_chart(
+                        fig, 
+                        use_container_width=True, 
+                        key=f"telemetry_chart_{sel_st['id']}_{sel_sn['id']}"
+                    )
                 else:
                     st.info("ℹ️ Bu sensöre ait henüz ölçüm verisi yok.")
 
