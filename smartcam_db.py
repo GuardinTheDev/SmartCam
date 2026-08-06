@@ -85,7 +85,7 @@ def init_db():
         )
     ''')
 
-    # 5. Kullanıcılar Tablosu (Ad Soyad, E-Posta, Telefon ve KVKK Alanları Eklendi)
+    # 5. Kullanıcılar Tablosu (2FA / E-Posta / Telefon Onay Alanları Eklendi)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,6 +97,13 @@ def init_db():
             kvkk_approved INTEGER DEFAULT 0,
             role TEXT DEFAULT 'user',
             status TEXT DEFAULT 'pending',
+            totp_secret TEXT,
+            is_2fa_enabled INTEGER DEFAULT 0,
+            email_verified INTEGER DEFAULT 0,
+            phone_verified INTEGER DEFAULT 0,
+            email_otp TEXT,
+            phone_otp TEXT,
+            current_session_token TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
@@ -105,7 +112,19 @@ def init_db():
     cursor.execute("PRAGMA table_info(users)")
     user_cols = [row['name'] if isinstance(row, sqlite3.Row) else row[1] for row in cursor.fetchall()]
     if user_cols:
-        new_cols = {'full_name': 'TEXT', 'email': 'TEXT', 'phone': 'TEXT', 'kvkk_approved': 'INTEGER DEFAULT 0'}
+        new_cols = {
+            'full_name': 'TEXT', 
+            'email': 'TEXT', 
+            'phone': 'TEXT', 
+            'kvkk_approved': 'INTEGER DEFAULT 0',
+            'totp_secret': 'TEXT',
+            'is_2fa_enabled': 'INTEGER DEFAULT 0',
+            'email_verified': 'INTEGER DEFAULT 0',
+            'phone_verified': 'INTEGER DEFAULT 0',
+            'email_otp': 'TEXT',
+            'phone_otp': 'TEXT',
+            'current_session_token': 'TEXT'
+        }
         for col_name, col_type in new_cols.items():
             if col_name not in user_cols:
                 cursor.execute(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}")
@@ -142,6 +161,10 @@ def init_db():
             INSERT OR IGNORE INTO sensors (id, station_id, sequence_number, label, channel_category_id, unit_type, default_unit, default_value)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', (s_id, st_id, s_id, lbl, cat, u_type, u_unit, d_val))
+
+    # Kullanıcı rol senkronizasyon migrasyonu
+    cursor.execute("UPDATE users SET role = 'two_factor_verified' WHERE is_2fa_enabled = 1 AND role = 'user'")
+    cursor.execute("UPDATE users SET role = 'user' WHERE is_2fa_enabled = 0 AND role = 'two_factor_verified'")
 
     conn.commit()
     conn.close()

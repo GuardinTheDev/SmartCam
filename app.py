@@ -24,6 +24,10 @@ if "username" not in st.session_state:
     st.session_state.username = None
 if "role" not in st.session_state:
     st.session_state.role = None
+if "auth_mode" not in st.session_state:
+    st.session_state.auth_mode = "login"
+if "session_token" not in st.session_state:
+    st.session_state.session_token = None
 
 
 # ---------------------------------------------------------
@@ -103,20 +107,26 @@ def inject_custom_css():
             border-radius: 10px;
             font-weight: 600;
             border: 1px solid rgba(255,255,255,0.12);
+            background-color: rgba(255, 255, 255, 0.05) !important;
+            color: #cbd5e1 !important;
             transition: all 0.15s ease;
             width: 100% !important;
         }
         .stButton > button[kind="primary"], .stFormSubmitButton > button[kind="primary"] {
-            background: linear-gradient(135deg, #3b82f6, #2563eb);
-            border: none;
+            background: linear-gradient(135deg, #3b82f6, #2563eb) !important;
+            color: #ffffff !important;
+            border: none !important;
             box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
         }
         .stButton > button[kind="primary"]:hover, .stFormSubmitButton > button[kind="primary"]:hover {
             box-shadow: 0 6px 20px rgba(37, 99, 235, 0.5);
+            background: linear-gradient(135deg, #2563eb, #1d4ed8) !important;
             transform: translateY(-1px);
         }
         .stButton > button:hover, .stFormSubmitButton > button:hover {
-            border-color: rgba(99, 179, 237, 0.5);
+            border-color: rgba(99, 179, 237, 0.5) !important;
+            background-color: rgba(255, 255, 255, 0.1) !important;
+            color: #ffffff !important;
             transform: translateY(-1px);
         }
 
@@ -139,13 +149,13 @@ def inject_custom_css():
         }
 
         /* ---- Giriş Kartı ---- */
-        .login-card {
-            background: linear-gradient(160deg, rgba(255,255,255,0.055), rgba(255,255,255,0.015));
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 20px;
-            padding: 34px 34px 20px 34px;
-            box-shadow: 0 12px 40px rgba(0,0,0,0.35);
-            margin-top: 10px;
+        .login-card, div[data-testid="stForm"] {
+            background: linear-gradient(160deg, rgba(255,255,255,0.055), rgba(255,255,255,0.015)) !important;
+            border: 1px solid rgba(255,255,255,0.08) !important;
+            border-radius: 20px !important;
+            padding: 34px 34px 20px 34px !important;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.35) !important;
+            margin-top: 10px !important;
         }
 
         /* ---- Input alanları ---- */
@@ -295,6 +305,7 @@ def check_persistent_session():
         q_user = st.query_params.get("session_user")
         q_role = st.query_params.get("session_role")
         q_exp = st.query_params.get("session_exp")
+        q_tok = st.query_params.get("session_token")
 
         if q_user and q_role and q_exp:
             try:
@@ -303,8 +314,9 @@ def check_persistent_session():
                     st.session_state.authenticated = True
                     st.session_state.username = q_user
                     st.session_state.role = q_role
+                    st.session_state.session_token = q_tok
                 else:
-                    # 1 saatlik süre dolmuş!
+                    # Süre dolmuş!
                     st.query_params.clear()
                     st.session_state.authenticated = False
             except Exception:
@@ -325,6 +337,7 @@ def check_persistent_session():
                         if (!url.searchParams.has('session_user')) {
                             url.searchParams.set('session_user', data.username);
                             url.searchParams.set('session_role', data.role);
+                            url.searchParams.set('session_token', data.session_token || '');
                             url.searchParams.set('session_exp', (data.expires_at / 1000).toString());
                             parentWin.location.href = url.href;
                         }
@@ -370,78 +383,95 @@ def render_auth_page():
 
     left, mid, right = st.columns([1, 1.3, 1])
     with mid:
-        st.markdown(
-            "<div style='text-align:center; margin-top: 30px;'>"
-            "<div style='font-size:52px;'>📡</div>"
-            "<h1 style='border:none; margin-bottom:0;'>SmartCam Telemetri Paneli</h1>"
-            "<p style='color:#93a4c2; margin-top:4px;'>IoT İstasyon İzleme ve Sensör Analiz Sistemi</p>"
-            "</div>",
-            unsafe_allow_html=True
+        current_mode = st.session_state.get("auth_mode", "login")
+
+        # SmartCam Header HTML to embed inside the card/form
+        header_html = (
+            "<div style='text-align:center; margin-bottom: 25px;'>"
+            "<div style='font-size:48px; margin-bottom:10px;'>📡</div>"
+            "<h2 style='border:none; margin-bottom:0; font-size:26px; font-weight:700; color:#f5f8ff;'>SmartCam Telemetri Paneli</h2>"
+            "<p style='color:#93a4c2; margin-top:4px; font-size:14px;'>IoT İstasyon İzleme ve Sensör Analiz Sistemi</p>"
+            "</div>"
         )
 
-        st.markdown("<div class='login-card'>", unsafe_allow_html=True)
-
-        tab_login, tab_register = st.tabs(["🔐   Giriş Yap", "📝   Kayıt Ol"])
-
-        with tab_login:
-            with st.form("login_form", clear_on_submit=False):
-                st.subheader("Kullanıcı Girişi")
-                login_user = st.text_input("Kullanıcı Adı / E-Posta / Telefon / Ad Soyad", key="login_user", placeholder="kullanıcı adı, e-posta veya telefon")
-                login_pass = st.text_input("Şifre", type="password", key="login_pass", placeholder="••••••••")
+        # --- MODE 1: 2FA GİRİŞ DOĞRULAMA SAYFASI ---
+        if current_mode == "2fa_verify":
+            pending_user = st.session_state.get("pending_2fa_user", "")
+            
+            with st.form("2fa_verify_form", clear_on_submit=False):
+                st.markdown(header_html, unsafe_allow_html=True)
+                st.subheader("🔐 İki Aşamalı Doğrulama (2FA)")
+                st.info(f"👤 **{pending_user}** hesabınız için Authenticator uygulamasındaki 6 haneli doğrulama kodunu giriniz.")
                 
-                st.caption("💡 *İpucu: Kullanıcı adı kutusundayken Enter veya ⬇️ Alt Ok tuşuna basarak şifre kutusuna geçebilirsiniz.*")
-                submitted = st.form_submit_button("Giriş Yap", type="primary")
+                totp_input = st.text_input("6 Haneli Doğrulama Kodu", placeholder="123456", max_chars=6, key="login_totp_code")
+                submitted_2fa = st.form_submit_button("Doğrula ve Giriş Yap", type="primary")
 
-                if submitted:
-                    if not login_user or not login_pass:
-                        st.warning("Lütfen kullanıcı bilgisi ve şifre alanlarını doldurunuz.")
+                if submitted_2fa:
+                    if not totp_input or len(totp_input.strip()) != 6:
+                        st.warning("⚠️ Lütfen 6 haneli kodu eksiksiz giriniz.")
                     else:
                         try:
                             res = requests.post(
                                 f"{API_BASE_URL}/auth/login",
-                                json={"username": login_user, "password": login_pass},
+                                json={
+                                    "username": pending_user,
+                                    "password": st.session_state.get("pending_2fa_pass", ""),
+                                    "totp_code": totp_input.strip()
+                                },
                                 timeout=5
                             )
                             if res.status_code == 200:
                                 data = res.json()
-                                username_val = data.get("username", login_user)
-                                role_val = data.get("role", "user")
-                                exp_time = pytime.time() + 3600  # 1 Saatlik (60 dk) Oturum Süresi
+                                if data.get("status") == "success":
+                                    username_val = data.get("username", pending_user)
+                                    role_val = data.get("role", "user")
+                                    token_val = data.get("session_token", "")
+                                    remember_me_pending = st.session_state.get("pending_remember_me", False)
+                                    expires_in = data.get("expires_in", 3600 if not remember_me_pending else (7 * 24 * 3600))
+                                    exp_time = pytime.time() + expires_in
 
-                                st.session_state.authenticated = True
-                                st.session_state.username = username_val
-                                st.session_state.role = role_val
+                                    st.session_state.authenticated = True
+                                    st.session_state.username = username_val
+                                    st.session_state.role = role_val
+                                    st.session_state.session_token = token_val
+                                    st.session_state.auth_mode = "login"
 
-                                # 1 saatlik oturumu URL query_params'a yaz
-                                st.query_params["session_user"] = username_val
-                                st.query_params["session_role"] = role_val
-                                st.query_params["session_exp"] = str(exp_time)
+                                    st.query_params["session_user"] = username_val
+                                    st.query_params["session_role"] = role_val
+                                    st.query_params["session_token"] = token_val
+                                    st.query_params["session_exp"] = str(exp_time)
 
-                                # Browser localStorage'a 1 saatlik oturumu kaydet
-                                st.components.v1.html(f"""
-                                    <script>
-                                    window.parent.localStorage.setItem('smartcam_user_session', JSON.stringify({{
-                                        username: "{username_val}",
-                                        role: "{role_val}",
-                                        expires_at: {int(exp_time * 1000)}
-                                    }}));
-                                    </script>
-                                """, height=0)
+                                    st.components.v1.html(f"""
+                                        <script>
+                                        window.parent.localStorage.setItem('smartcam_user_session', JSON.stringify({{
+                                            username: "{username_val}",
+                                            role: "{role_val}",
+                                            session_token: "{token_val}",
+                                            expires_at: {int(exp_time * 1000)}
+                                        }}));
+                                        </script>
+                                    """, height=0)
 
-                                st.success("Giriş başarılı!")
-                                st.rerun()
-                            elif res.status_code == 403:
-                                st.error("❌ Hesabınız henüz yönetici tarafından onaylanmamış.")
+                                    st.success("✅ 2FA Doğrulaması Başarılı! Giriş yapılıyor...")
+                                    st.rerun()
+                                else:
+                                    st.error(f"❌ {data.get('message', 'Doğrulama başarısız.')}")
                             else:
-                                st.error("❌ Hatalı kullanıcı adı veya şifre!")
-                        except requests.exceptions.ConnectionError:
-                            st.error("❌ API sunucusuna bağlanılamadı! Lütfen backend'in çalıştığından emin olun.")
+                                err_msg = res.json().get("detail", "Hatalı 2FA Kodu!")
+                                st.error(f"❌ {err_msg}")
                         except Exception as e:
-                            st.error(f"Giriş sırasında bir hata oluştu: {e}")
+                            st.error(f"Doğrulama sırasında hata: {e}")
 
-        with tab_register:
+            st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+            if st.button("⬅️ İptal Et ve Giriş Ekranına Dön", use_container_width=True):
+                st.session_state.auth_mode = "login"
+                st.rerun()
+
+        # --- MODE 2: SADECE KAYIT OL SAYFASI (GİRİŞ EKRANINDAN AYRILDI) ---
+        elif current_mode == "register":
             with st.form("register_form", clear_on_submit=False):
-                st.subheader("Yeni Kullanıcı Kaydı")
+                st.markdown(header_html, unsafe_allow_html=True)
+                st.subheader("📝 Yeni Kullanıcı Kaydı")
                 reg_fullname = st.text_input("Ad Soyad", key="reg_fullname", placeholder="Ahmet Yılmaz")
                 reg_user = st.text_input("Kullanıcı Adı", key="reg_user", placeholder="kullanici_adi")
                 
@@ -488,7 +518,15 @@ def render_auth_page():
                                 timeout=5
                             )
                             if res.status_code in [200, 201]:
+                                data = res.json()
                                 st.success("✅ Kayıt başvurunuz alındı! Hesabınız Admin onayına gönderildi.")
+                                if data.get("email_otp_demo") and data.get("phone_otp_demo"):
+                                    st.info(
+                                        f"📱 **Test / Demo Doğrulama Kodlarınız:**\n"
+                                        f"- E-Posta Onay Kodu: `{data.get('email_otp_demo')}`\n"
+                                        f"- Telefon Onay Kodu: `{data.get('phone_otp_demo')}`\n"
+                                        f"*(Giriş yaptıktan sonra profil ayarlarınızdan kodları doğrulayabilirsiniz)*"
+                                    )
                             else:
                                 err_msg = res.json().get("detail", "Kayıt oluşturulamadı.")
                                 st.error(f"❌ {err_msg}")
@@ -497,7 +535,89 @@ def render_auth_page():
                         except Exception as e:
                             st.error(f"Kayıt sırasında bir hata oluştu: {e}")
 
-        st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+            if st.button("⬅️ Zaten hesabınız var mı? Giriş Yapın", use_container_width=True):
+                st.session_state.auth_mode = "login"
+                st.rerun()
+
+        # --- MODE 3: GİRİŞ YAP SAYFASI (VARSAYILAN GİRİŞ EKRANI) ---
+        else:
+            with st.form("login_form", clear_on_submit=False):
+                st.markdown(header_html, unsafe_allow_html=True)
+                st.subheader("🔐 Kullanıcı Girişi")
+                login_user = st.text_input("Kullanıcı Adı / E-Posta / Telefon / Ad Soyad", key="login_user", placeholder="kullanıcı adı, e-posta veya telefon")
+                login_pass = st.text_input("Şifre", type="password", key="login_pass", placeholder="••••••••")
+                
+                remember_me = st.checkbox("📌 Beni Hatırla (7 Gün Oturumu Açık Tut)", key="remember_me_check")
+                
+                submitted = st.form_submit_button("Giriş Yap", type="primary")
+
+                if submitted:
+                    if not login_user or not login_pass:
+                        st.warning("Lütfen kullanıcı bilgisi ve şifre alanlarını doldurunuz.")
+                    else:
+                        try:
+                            res = requests.post(
+                                f"{API_BASE_URL}/auth/login",
+                                json={
+                                    "username": login_user, 
+                                    "password": login_pass,
+                                    "remember_me": remember_me
+                                },
+                                timeout=5
+                            )
+                            if res.status_code == 200:
+                                data = res.json()
+                                if data.get("status") == "2fa_required":
+                                    st.session_state.pending_2fa_user = login_user
+                                    st.session_state.pending_2fa_pass = login_pass
+                                    st.session_state.pending_remember_me = remember_me
+                                    st.session_state.auth_mode = "2fa_verify"
+                                    st.rerun()
+                                else:
+                                    username_val = data.get("username", login_user)
+                                    role_val = data.get("role", "user")
+                                    token_val = data.get("session_token", "")
+                                    expires_in = data.get("expires_in", 3600 if not remember_me else (7 * 24 * 3600))
+                                    exp_time = pytime.time() + expires_in
+
+                                    st.session_state.authenticated = True
+                                    st.session_state.username = username_val
+                                    st.session_state.role = role_val
+                                    st.session_state.session_token = token_val
+
+                                    st.query_params["session_user"] = username_val
+                                    st.query_params["session_role"] = role_val
+                                    st.query_params["session_token"] = token_val
+                                    st.query_params["session_exp"] = str(exp_time)
+
+                                    st.components.v1.html(f"""
+                                        <script>
+                                        window.parent.localStorage.setItem('smartcam_user_session', JSON.stringify({{
+                                            username: "{username_val}",
+                                            role: "{role_val}",
+                                            session_token: "{token_val}",
+                                            expires_at: {int(exp_time * 1000)}
+                                        }}));
+                                        </script>
+                                    """, height=0)
+
+                                    st.success("Giriş başarılı!")
+                                    st.rerun()
+                            elif res.status_code == 403:
+                                st.error("❌ Hesabınız henüz yönetici tarafından onaylanmamış.")
+                            else:
+                                st.error("❌ Hatalı kullanıcı adı veya şifre!")
+                        except requests.exceptions.ConnectionError:
+                            st.error("❌ API sunucusuna bağlanılamadı! Lütfen backend'in çalıştığından emin olun.")
+                        except Exception as e:
+                            st.error(f"Giriş sırasında bir hata oluştu: {e}")
+
+            st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+            st.caption("Hesabınız yok mu?")
+            if st.button("📝 Yeni Hesap Oluştur (Kayıt Ol)", use_container_width=True):
+                st.session_state.auth_mode = "register"
+                st.rerun()
 
 
 # ---------------------------------------------------------
@@ -527,12 +647,14 @@ def render_admin_management_center(stations):
                             full_name = user.get("full_name") or ""
                             email = user.get("email") or ""
                             phone = user.get("phone") or ""
+                            em_ver = "✅ E-Posta Onaylı" if user.get("email_verified") else "❌ E-Posta Onaysız"
+                            ph_ver = "✅ Telefon Onaylı" if user.get("phone_verified") else "❌ Telefon Onaysız"
+                            fa_ver = "🔒 2FA Aktif" if user.get("is_2fa_enabled") else "🔓 2FA Pasif"
 
                             col_u1, col_u2, col_u3 = st.columns([3, 1, 1])
                             with col_u1:
                                 st.markdown(f"**👤 {u_name}** ({full_name}) `ID: {u_id}`")
-                                if email or phone:
-                                    st.caption(f"📧 {email} | 📞 {phone}")
+                                st.caption(f"📧 {email} ({em_ver}) | 📞 {phone} ({ph_ver}) | {fa_ver}")
                             with col_u2:
                                 if st.button("✅ Onayla", key=f"app_{u_id}", use_container_width=True):
                                     requests.post(
@@ -755,6 +877,21 @@ def render_live_chart_section(station_id, limit, station_name, sensor_obj):
                 yaxis=dict(gridcolor="rgba(255,255,255,0.08)", fixedrange=True)
             )
             st.plotly_chart(fig, use_container_width=True, key=f"telemetry_chart_{station_id}_{sensor_obj['id']}")
+
+            # 📊 Sensör İstatistik Özet Kartları (Min, Max, Ortalama, Toplam Ölçüm)
+            if not df_sensor.empty and "raw_value" in df_sensor.columns:
+                min_val = round(df_sensor["raw_value"].min(), 2)
+                max_val = round(df_sensor["raw_value"].max(), 2)
+                avg_val = round(df_sensor["raw_value"].mean(), 2)
+                count_val = len(df_sensor)
+                unit_str = sensor_obj.get("default_unit", "")
+
+                st.markdown(f"##### 📊 **{sensor_obj['label']}** İstatistiksel Analiz Özeti")
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("⬇️ Minimum Ölçüm", f"{min_val} {unit_str}")
+                m2.metric("⬆️ Maksimum Ölçüm", f"{max_val} {unit_str}")
+                m3.metric("📊 Ortalama Değer", f"{avg_val} {unit_str}")
+                m4.metric("🔢 Toplam Ölçüm Sayısı", f"{count_val} Kayıt")
         else:
             st.info(f"ℹ️ '{sensor_obj['label']}' sensörü (Kanal ID: {sensor_obj['id']}) için henüz veritabanında log kaydı bulunmamaktadır.")
 
@@ -765,6 +902,34 @@ def render_live_chart_section(station_id, limit, station_name, sensor_obj):
 # 5. ANA KONTROL PANELİ & KADEMELİ İSTASYON/SENSÖR SEÇİMİ
 # ---------------------------------------------------------
 def render_dashboard():
+    # TEK AKTİF OTURUM KONTROLÜ (SINGLE SESSION VALIDATION)
+    if st.session_state.authenticated and st.session_state.username:
+        sess_tok = st.session_state.get("session_token") or st.query_params.get("session_token", "")
+        if sess_tok:
+            try:
+                res_val = requests.post(
+                    f"{API_BASE_URL}/auth/validate-session",
+                    json={"username": st.session_state.username, "session_token": sess_tok},
+                    timeout=5
+                )
+                if res_val.status_code == 200:
+                    val_data = res_val.json()
+                    if not val_data.get("valid", True):
+                        st.session_state.authenticated = False
+                        st.session_state.username = None
+                        st.session_state.role = None
+                        st.session_state.session_token = None
+                        st.query_params.clear()
+                        st.components.v1.html("""
+                            <script>
+                            window.parent.localStorage.removeItem('smartcam_user_session');
+                            </script>
+                        """, height=0)
+                        st.warning("⚠️ " + val_data.get("message", "Hesabınıza başka bir cihaz veya sekmeden giriş yapıldığı için oturumunuz kapatıldı."))
+                        st.rerun()
+            except Exception:
+                pass
+
     # Sidebar Profil
     st.sidebar.markdown(
         f"<div style='text-align:center; padding: 10px 0 4px 0;'>"
@@ -774,12 +939,87 @@ def render_dashboard():
         f"</div>",
         unsafe_allow_html=True
     )
-    st.sidebar.markdown("<div style='margin-top:14px;'></div>", unsafe_allow_html=True)
+    # Sidebar 2FA Ayarları
+    with st.sidebar.expander("🔒 2FA Güvenlik Ayarları"):
+        st.caption("Google / Microsoft Authenticator ile 2 aşamalı doğrulama ayarlayın.")
+        current_u = st.session_state.username
+        
+        if st.button("📲 2FA QR Kodu Oluştur / Göster", use_container_width=True):
+            try:
+                res = requests.post(f"{API_BASE_URL}/auth/setup-2fa", json={"username": current_u}, timeout=5)
+                if res.status_code == 200:
+                    data = res.json()
+                    st.session_state.qr_code_b64 = data.get("qr_code_base64")
+                    st.session_state.totp_secret_key = data.get("secret")
+                    st.session_state.is_2fa_active = data.get("is_2fa_enabled")
+                    st.toast("2FA QR Kodu oluşturuldu!", icon="📲")
+            except Exception as e:
+                st.error(f"Hata: {e}")
+
+        if "qr_code_b64" in st.session_state:
+            st.image(f"data:image/png;base64,{st.session_state.qr_code_b64}", caption="Authenticator ile Okutun", use_container_width=True)
+            st.caption("Manuel Gizli Anahtar (Secret):")
+            st.code(st.session_state.totp_secret_key, language="text")
+            
+            with st.form("activate_2fa_sidebar_form"):
+                verify_code_input = st.text_input("Uygulamadaki 6 Haneli Kod", max_chars=6)
+                if st.form_submit_button("✅ 2FA'yı Aktifleştir", type="primary"):
+                    try:
+                        res = requests.post(
+                            f"{API_BASE_URL}/auth/verify-2fa",
+                            json={"username": current_u, "code": verify_code_input.strip()},
+                            timeout=5
+                        )
+                        if res.status_code == 200:
+                            st.success("✅ 2FA Başarıyla Etkinleştirildi!")
+                            if "qr_code_b64" in st.session_state:
+                                del st.session_state["qr_code_b64"]
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {res.json().get('detail', 'Hatalı kod!')}")
+                    except Exception as e:
+                        st.error(f"Hata: {e}")
+
+    # Sidebar E-Posta & Telefon Onayı
+    with st.sidebar.expander("📩 E-Posta & Telefon Doğrulama"):
+        st.caption("Hesap güvenliğiniz için iletişim bilgilerinizi 6 haneli OTP kodu ile doğrulayın.")
+        curr_user = st.session_state.username
+
+        ch = st.radio("Doğrulama Kanalı Seçin", options=["E-Posta", "Telefon"], key="verify_channel_radio")
+        ch_key = "email" if ch == "E-Posta" else "phone"
+
+        if st.button(f"📩 {ch} İçin Kod Gönder", use_container_width=True):
+            try:
+                res = requests.post(f"{API_BASE_URL}/auth/send-otp", json={"username": curr_user, "channel": ch_key}, timeout=5)
+                if res.status_code == 200:
+                    d = res.json()
+                    st.toast(d.get("message", "Kod gönderildi!"), icon="📩")
+                    if d.get("otp_demo"):
+                        st.info(f"🔑 **{ch} Onay Kodunuz (Demo):** `{d.get('otp_demo')}`")
+            except Exception as e:
+                st.error(f"Hata: {e}")
+
+        with st.form("verify_otp_form"):
+            otp_val = st.text_input("6 Haneli Onay Kodu", max_chars=6, key="otp_val_input")
+            if st.form_submit_button("✅ Kodu Doğrula", type="primary"):
+                if not otp_val:
+                    st.warning("Lütfen kodu giriniz.")
+                else:
+                    try:
+                        res = requests.post(f"{API_BASE_URL}/auth/verify-otp", json={"username": curr_user, "channel": ch_key, "code": otp_val.strip()}, timeout=5)
+                        if res.status_code == 200:
+                            st.success(res.json().get("message", "Doğrulandı!"))
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {res.json().get('detail', 'Hatalı kod!')}")
+                    except Exception as e:
+                        st.error(f"Hata: {e}")
 
     if st.sidebar.button("🚪 Çıkış Yap", use_container_width=True):
         st.session_state.authenticated = False
         st.session_state.username = None
         st.session_state.role = None
+        st.session_state.session_token = None
         st.query_params.clear()
         st.components.v1.html("""
             <script>
@@ -804,6 +1044,17 @@ def render_dashboard():
     # Admin ise İstasyon & Sensör & Kullanıcı Yönetim Panelini göster
     if st.session_state.role == "admin":
         render_admin_management_center(stations)
+
+    # Rol 'user' ise aygıtları gizle ve uyarı göster
+    if st.session_state.role == "user":
+        st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
+        st.warning(
+            "🔒 **Aygıtları ve Telemetri Verilerini Görüntüleme Yetkiniz Yok!**\n\n"
+            "İstasyonları ve sensör verilerini görüntülemek ve analiz etmek için lütfen hesabınızı doğrulayınız (İki Aşamalı Doğrulamayı / 2FA aktif ediniz).\n\n"
+            "👉 Sol taraftaki menüde yer alan **'🔒 2FA Güvenlik Ayarları'** sekmesini açarak "
+            "iki aşamalı doğrulamayı hemen aktif edebilirsiniz. Aktifleştirdikten sonra tüm istasyonlar ve sensör verileri erişiminize açılacaktır."
+        )
+        return
 
     if not stations:
         st.warning("Veritabanında kayıtlı istasyon bulunamadı. Lütfen backend'i çalıştırdığınızdan veya yukarıdaki Admin Merkezinden bir istasyon eklediğinizden emin olun.")

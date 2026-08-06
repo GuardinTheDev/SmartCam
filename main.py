@@ -7,6 +7,12 @@ import smartcam_db as database
 import sqlite3
 import hashlib
 import time
+import io
+import base64
+import pyotp
+import qrcode
+import random
+import uuid
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -26,7 +32,7 @@ app.add_middleware(
 # --- PYDANTIC VERİ MODELLERİ ---
 class IoTDataPayload(BaseModel):
     istCode: str
-    securityCode: str
+    securityCode: str 
     runType: str
     tVer: str
     model: str
@@ -47,6 +53,32 @@ class IoTDataPayload(BaseModel):
     sensorData: Dict[str, List[str]]
 
 class LoginRequest(BaseModel):
+    username: str
+    password: str
+    totp_code: Optional[str] = None
+    remember_me: Optional[bool] = False
+
+class ValidateSessionRequest(BaseModel):
+    username: str
+    session_token: str
+
+class SendOTPRequest(BaseModel):
+    username: str
+    channel: str  # 'email' veya 'phone'
+
+class VerifyOTPRequest(BaseModel):
+    username: str
+    channel: str  # 'email' veya 'phone'
+    code: str
+
+class Setup2FARequest(BaseModel):
+    username: str
+
+class Verify2FARequest(BaseModel):
+    username: str
+    code: str
+
+class Disable2FARequest(BaseModel):
     username: str
     password: str
 
@@ -155,31 +187,95 @@ async def register_user(credentials: RegisterRequest):
             raise HTTPException(status_code=400, detail="Bu kullanıcı adı zaten alınmış veya onay bekliyor!")
             
     try:
+        email_otp = str(random.randint(100000, 999999))
+        phone_otp = str(random.randint(100000, 999999))
+
         cursor.execute(
             '''INSERT INTO users 
-               (username, password, full_name, email, phone, kvkk_approved, role, status) 
-               VALUES (?, ?, ?, ?, ?, ?, 'user', 'pending')''', 
+               (username, password, full_name, email, phone, kvkk_approved, role, status, email_otp, phone_otp, email_verified, phone_verified) 
+               VALUES (?, ?, ?, ?, ?, ?, 'user', 'pending', ?, ?, 0, 0)''', 
             (
                 credentials.username, 
                 credentials.password, 
                 credentials.full_name, 
                 credentials.email, 
                 credentials.phone, 
-                1 if credentials.kvkk_approved else 0
+                1 if credentials.kvkk_approved else 0,
+                email_otp,
+                phone_otp
             )
         )
         conn.commit()
         conn.close()
         return {
             "status": "success", 
-            "message": f"Kayıt isteğiniz alındı! '{credentials.username}' ({credentials.full_name}) kullanıcısı Admin onayı bekliyor."
+            "message": f"Kayıt isteğiniz alındı! '{credentials.username}' ({credentials.full_name}) kullanıcısı Admin onayı bekliyor.",
+            "email_otp_demo": email_otp,
+            "phone_otp_demo": phone_otp
         }
     except sqlite3.IntegrityError:
         conn.close()
         raise HTTPException(status_code=400, detail="Bu kullanıcı adı zaten alınmış!")
 
 
-# --- 3. KULLANICI GİRİŞİ (LOGIN - KULLANICI ADI, E-POSTA, TELEFON VEYA AD SOYAD İLE) ---
+# --- 2.1. E-POSTA / TELEFON OTP KODU GÖNDERME ---
+@app.post("/api/auth/send-otp")
+async def send_otp(req: SendOTPRequest):
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, email, phone FROM users WHERE username = ?", (req.username,))
+    user = cursor.fetchone()
+    
+    if not user:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı!")
+
+    new_otp = str(random.randint(100000, 999999))
+    col_name = "email_otp" if req.channel == "email" else "phone_otp"
+    
+    cursor.execute(f"UPDATE users SET {col_name} = ? WHERE id = ?", (new_otp, user["id"]))
+    conn.commit()
+    conn.close()
+    
+    target_info = user["email"] if req.channel == "email" else user["phone"]
+    return {
+        "status": "success",
+        "message": f"{'E-Posta' if req.channel == 'email' else 'Telefon'} ({target_info}) için 6 haneli doğrulama kodu gönderildi.",
+        "otp_demo": new_otp
+    }
+
+
+# --- 2.2. E-POSTA / TELEFON OTP KODU DOĞRULAMA ---
+@app.post("/api/auth/verify-otp")
+async def verify_otp(req: VerifyOTPRequest):
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    
+    col_otp = "email_otp" if req.channel == "email" else "phone_otp"
+    col_ver = "email_verified" if req.channel == "email" else "phone_verified"
+    
+    cursor.execute(f"SELECT id, {col_otp} FROM users WHERE username = ?", (req.username,))
+    user = cursor.fetchone()
+    
+    if not user:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı!")
+        
+    saved_otp = user[col_otp]
+    if saved_otp and saved_otp.strip() == req.code.strip():
+        cursor.execute(f"UPDATE users SET {col_ver} = 1 WHERE id = ?", (user["id"],))
+        conn.commit()
+        conn.close()
+        return {
+            "status": "success",
+            "message": f"✅ {'E-Posta' if req.channel == 'email' else 'Telefon'} başarıyla doğrulandı!"
+        }
+    else:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Hatalı doğrulama kodu! Lütfen kontrol edip tekrar deneyiniz.")
+
+
+# --- 3. KULLANICI GİRİŞİ (LOGIN - 2FA & BENİ HATIRLA DESTEKLİ) ---
 @app.post("/api/auth/login")
 async def login(credentials: LoginRequest):
     conn = database.get_db_connection()
@@ -210,12 +306,148 @@ async def login(credentials: LoginRequest):
     elif user_dict["status"] == "rejected":
         raise HTTPException(status_code=403, detail="Kayıt başvurunuz Admin tarafından reddedildi.")
     
+    # 2FA (İKİ AŞAMALI DOĞRULAMA) KONTROLÜ
+    is_2fa_enabled = bool(user_dict.get("is_2fa_enabled"))
+    if is_2fa_enabled:
+        totp_secret = user_dict.get("totp_secret")
+        if not credentials.totp_code:
+            return {
+                "status": "2fa_required",
+                "message": "İki aşamalı doğrulama (2FA) gereklidir.",
+                "username": user_dict["username"]
+            }
+        
+        # TOTP Doğrulama
+        totp = pyotp.TOTP(totp_secret)
+        if not totp.verify(credentials.totp_code.strip()):
+            raise HTTPException(status_code=400, detail="Hatalı 2FA doğrulama kodu! Lütfen Authenticator uygulamanızı kontrol edin.")
+
+    # TEK AKTİF OTURUM (SINGLE SESSION ENFORCEMENT)
+    new_session_token = uuid.uuid4().hex
+    conn_up = database.get_db_connection()
+    cur_up = conn_up.cursor()
+    cur_up.execute("UPDATE users SET current_session_token = ? WHERE id = ?", (new_session_token, user_dict["id"]))
+    conn_up.commit()
+    conn_up.close()
+
+    # Beni Hatırla: True ise 7 gün (604800 sn), False ise 1 saat (3600 sn)
+    expires_in_seconds = (7 * 24 * 3600) if credentials.remember_me else 3600
+
     return {
         "status": "success", 
         "message": "Giriş başarılı", 
         "username": user_dict["username"],
-        "role": user_dict["role"]
+        "role": user_dict["role"],
+        "is_2fa_enabled": is_2fa_enabled,
+        "email_verified": bool(user_dict.get("email_verified")),
+        "phone_verified": bool(user_dict.get("phone_verified")),
+        "expires_in": expires_in_seconds,
+        "session_token": new_session_token
     }
+
+
+# --- 3.0. OTURUM GEÇERLİLİK KONTROLÜ (TEK AKTİF OTURUM DOĞRULAMA) ---
+@app.post("/api/auth/validate-session")
+async def validate_session(req: ValidateSessionRequest):
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT current_session_token FROM users WHERE username = ?", (req.username,))
+    user = cursor.fetchone()
+    conn.close()
+
+    if not user or user["current_session_token"] != req.session_token:
+        return {
+            "valid": False,
+            "message": "Hesabınıza başka bir cihaz veya sekmeden giriş yapıldığı için mevcut oturumunuz sonlandırıldı!"
+        }
+    
+    return {"valid": True, "message": "Oturum geçerli."}
+
+
+# --- 3.1. 2FA QR KOD & SECRET OLUŞTURMA (SETUP 2FA) ---
+@app.post("/api/auth/setup-2fa")
+async def setup_2fa(req: Setup2FARequest):
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, username, email, totp_secret, is_2fa_enabled FROM users WHERE username = ?", (req.username,))
+    user = cursor.fetchone()
+    
+    if not user:
+        conn.close()
+        raise HTTPException(status_code=44, detail="Kullanıcı bulunamadı!")
+    
+    user_dict = dict(user)
+    totp_secret = user_dict.get("totp_secret")
+    
+    if not totp_secret:
+        totp_secret = pyotp.random_base32()
+        cursor.execute("UPDATE users SET totp_secret = ? WHERE id = ?", (totp_secret, user_dict["id"]))
+        conn.commit()
+    
+    conn.close()
+    
+    # Authenticator URI Oluştur
+    label = user_dict.get("email") or user_dict["username"]
+    totp_uri = pyotp.totp.TOTP(totp_secret).provisioning_uri(
+        name=label,
+        issuer_name="SmartCam IoT"
+    )
+    
+    # QR Kod PNG Üret
+    img = qrcode.make(totp_uri)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    qr_base64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+    
+    return {
+        "status": "success",
+        "secret": totp_secret,
+        "qr_code_base64": qr_base64,
+        "is_2fa_enabled": bool(user_dict.get("is_2fa_enabled"))
+    }
+
+
+# --- 3.2. 2FA KODU DOĞRULAMA VE AKTİFLEŞTİRME ---
+@app.post("/api/auth/verify-2fa")
+async def verify_2fa(req: Verify2FARequest):
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, totp_secret, role FROM users WHERE username = ?", (req.username,))
+    user = cursor.fetchone()
+    
+    if not user or not user["totp_secret"]:
+        conn.close()
+        raise HTTPException(status_code=400, detail="2FA kurulumu bulunamadı! Önce kurulum başlatın.")
+    
+    totp = pyotp.TOTP(user["totp_secret"])
+    if totp.verify(req.code.strip()):
+        new_role = "two_factor_verified" if user["role"] == "user" else user["role"]
+        cursor.execute("UPDATE users SET is_2fa_enabled = 1, role = ? WHERE id = ?", (new_role, user["id"]))
+        conn.commit()
+        conn.close()
+        return {"status": "success", "message": "2FA doğrulaması başarılı! İki aşamalı doğrulama hesabınızda etkinleştirildi."}
+    else:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Hatalı 2FA doğrulama kodu!")
+
+
+# --- 3.3. 2FA DEVRE DIŞI BIRAKMA ---
+@app.post("/api/auth/disable-2fa")
+async def disable_2fa(req: Disable2FARequest):
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, password, role FROM users WHERE username = ?", (req.username,))
+    user = cursor.fetchone()
+    
+    if not user or user["password"] != req.password:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Doğrulama başarısız! Şifreniz hatalı.")
+    
+    new_role = "user" if user["role"] == "two_factor_verified" else user["role"]
+    cursor.execute("UPDATE users SET is_2fa_enabled = 0, role = ? WHERE id = ?", (new_role, user["id"]))
+    conn.commit()
+    conn.close()
+    return {"status": "success", "message": "İki aşamalı doğrulama (2FA) devredışı bırakıldı."}
 
 
 # --- 4. ADMİN İÇİN ONAY BEKLEYEN KULLANICILARI LİSTELEME ---
@@ -223,7 +455,7 @@ async def login(credentials: LoginRequest):
 async def get_pending_users():
     conn = database.get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, username, full_name, email, phone, role, status, created_at FROM users WHERE status = 'pending'")
+    cursor.execute("SELECT id, username, full_name, email, phone, role, status, email_verified, phone_verified, is_2fa_enabled, created_at FROM users WHERE status = 'pending'")
     pending_users = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return pending_users

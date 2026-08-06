@@ -18,17 +18,30 @@ def get_ngrok_url():
     return None
 
 def main():
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    os.chdir(BASE_DIR)
+
     print("=================================================")
     print("🚀 SmartCam IoT Platformu (Fix) — Tek Komut Başlatıcı")
     print("=================================================")
 
-    python_bin = sys.executable
-    if os.path.exists("./venv/bin/python"):
-        python_bin = "./venv/bin/python"
-    
-    streamlit_bin = "streamlit"
-    if os.path.exists("./venv/bin/streamlit"):
-        streamlit_bin = "./venv/bin/streamlit"
+    # Çevre değişkenlerinin çakışmasını önle
+    os.environ.pop("VIRTUAL_ENV", None)
+    os.environ.pop("PYTHONPATH", None)
+    os.environ.pop("PYTHONHOME", None)
+
+    venv_python = os.path.join(BASE_DIR, "venv", "bin", "python")
+    venv_streamlit = os.path.join(BASE_DIR, "venv", "bin", "streamlit")
+
+    if os.path.exists(venv_python):
+        python_bin = venv_python
+    else:
+        python_bin = sys.executable
+
+    if os.path.exists(venv_streamlit):
+        streamlit_bin = venv_streamlit
+    else:
+        streamlit_bin = "streamlit"
 
     ngrok_bin = "ngrok"
     user_home = os.path.expanduser("~")
