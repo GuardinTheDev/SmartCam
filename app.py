@@ -721,13 +721,23 @@ def render_live_chart_section(station_id, limit, station_name, sensor_obj):
                     (df_sensor["recorded_at"] <= end_dt)
                 ]
 
-            chart_title = f"{station_name} — {sensor_obj['label']} Zaman Serisi Ölçüm Grafiği"
+            ver_key = f"fix_zoom_ver_{station_id}_{sensor_obj['id']}"
+            if ver_key not in st.session_state:
+                st.session_state[ver_key] = 0
+
+            # Grafiğin üstüne başlık ve Türkçe "Grafiği Sıfırla" butonu koyuyoruz
+            c_title, c_rst = st.columns([4, 1.2])
+            with c_title:
+                st.markdown(f"#### 📈 {station_name} — {sensor_obj['label']} Zaman Serisi Ölçüm Grafiği")
+            with c_rst:
+                if st.button("🔄 Grafiği Sıfırla", key=f"reset_btn_{station_id}_{sensor_obj['id']}", help="Yakınlaştırmayı sıfırlar ve tam boyuta döner"):
+                    st.session_state[ver_key] += 1
+                    st.rerun()
 
             fig = px.line(
                 df_sensor,
                 x="recorded_at" if "recorded_at" in df_sensor.columns else "id",
                 y="raw_value",
-                title=chart_title,
                 markers=True,
                 labels={"recorded_at": "Tarih / Zaman", "id": "Kayıt No", "raw_value": f"Değer ({sensor_obj.get('default_unit', '')})"}
             )
@@ -739,12 +749,12 @@ def render_live_chart_section(station_id, limit, station_name, sensor_obj):
                 plot_bgcolor="rgba(0,0,0,0)",
                 paper_bgcolor="rgba(0,0,0,0)",
                 font=dict(family="Inter, sans-serif", color="#dbe6f7"),
-                title_font=dict(size=17, color="#f5f8ff"),
-                margin=dict(l=10, r=10, t=55, b=10),
+                margin=dict(l=10, r=10, t=10, b=10),
+                uirevision=f"sensor_{station_id}_{sensor_obj['id']}_{st.session_state[ver_key]}",
+                xaxis=dict(gridcolor="rgba(255,255,255,0.08)", fixedrange=False),
+                yaxis=dict(gridcolor="rgba(255,255,255,0.08)", fixedrange=True)
             )
-            fig.update_xaxes(gridcolor="rgba(255,255,255,0.08)")
-            fig.update_yaxes(gridcolor="rgba(255,255,255,0.08)")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key=f"telemetry_chart_{station_id}_{sensor_obj['id']}")
         else:
             st.info(f"ℹ️ '{sensor_obj['label']}' sensörü (Kanal ID: {sensor_obj['id']}) için henüz veritabanında log kaydı bulunmamaktadır.")
 
