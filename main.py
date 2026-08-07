@@ -1,4 +1,5 @@
-from fastapi import FastAPI, HTTPException, status, Query
+from fastapi import FastAPI, HTTPException, status, Query, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Dict, List, Optional
@@ -94,6 +95,25 @@ class UserApprovalRequest(BaseModel):
     user_id: int
     action: str  # 'approve' veya 'reject'
 
+import os
+
+def hash_password(password: str) -> str:
+    salt = os.urandom(16)
+    # Generate PBKDF2 HMAC SHA-256 hash (100,000 iterations)
+    pw_hash = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, 100000)
+    return f"{salt.hex()}:{pw_hash.hex()}"
+
+def verify_password(stored_password: str, provided_password: str) -> bool:
+    if not stored_password:
+        return False
+    if ":" not in stored_password:
+        # Geriye dönük uyumluluk (Eski düz metin şifreler için)
+        return stored_password == provided_password
+    salt_hex, hash_hex = stored_password.split(":")
+    salt = bytes.fromhex(salt_hex)
+    pw_hash = hashlib.pbkdf2_hmac('sha256', provided_password.encode('utf-8'), salt, 100000)
+    return pw_hash.hex() == hash_hex
+
 def validate_password_strength(password: str, username: str = "", full_name: str = ""):
     if len(password) < 6:
         return False, "Şifre en az 6 karakter uzunluğunda olmalıdır!"
@@ -119,6 +139,30 @@ def validate_password_strength(password: str, username: str = "", full_name: str
             return False, f"Şifreniz '{pattern}' gibi çok basit kalıplar içeremez."
 
     return True, "Şifre güçlü."
+
+security = HTTPBearer()
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    token = credentials.credentials
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, username, role, status FROM users WHERE current_session_token = ?", (token,))
+    user = cursor.fetchone()
+    conn.close()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Geçersiz veya süresi dolmuş oturum token'ı!"
+        )
+    return dict(user)
+
+async def get_current_admin(current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="Bu işlem için Admin yetkisi gerekmektedir!"
+        )
+    return current_user
 
 class StationCreateRequest(BaseModel):
     category_id: int
@@ -189,6 +233,7 @@ async def register_user(credentials: RegisterRequest):
     try:
         email_otp = str(random.randint(100000, 999999))
         phone_otp = str(random.randint(100000, 999999))
+        hashed_pw = hash_password(credentials.password)
 
         cursor.execute(
             '''INSERT INTO users 
@@ -196,7 +241,7 @@ async def register_user(credentials: RegisterRequest):
                VALUES (?, ?, ?, ?, ?, ?, 'user', 'pending', ?, ?, 0, 0)''', 
             (
                 credentials.username, 
-                credentials.password, 
+                hashed_pw, 
                 credentials.full_name, 
                 credentials.email, 
                 credentials.phone, 
@@ -275,31 +320,76 @@ async def verify_otp(req: VerifyOTPRequest):
         raise HTTPException(status_code=400, detail="Hatalı doğrulama kodu! Lütfen kontrol edip tekrar deneyiniz.")
 
 
+# Bruteforce engelleme için in-memory deneme kaydı
+# Yapı: {identifier: {"attempts": int, "lock_until": float}}
+login_attempts = {}
+
 # --- 3. KULLANICI GİRİŞİ (LOGIN - 2FA & BENİ HATIRLA DESTEKLİ) ---
 @app.post("/api/auth/login")
 async def login(credentials: LoginRequest):
-    conn = database.get_db_connection()
-    cursor = conn.cursor()
-    
     identifier = credentials.username.strip()
     clean_phone = identifier.replace(" ", "")
+    
+    # 1. Bruteforce Kilidi Kontrolü
+    now = time.time()
+    attempt_key = identifier.lower()
+    attempt_info = login_attempts.get(attempt_key)
+    
+    if attempt_info and attempt_info["lock_until"] > now:
+        remaining_time = int(attempt_info["lock_until"] - now)
+        minutes = remaining_time // 60
+        seconds = remaining_time % 60
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Çok fazla hatalı giriş denemesi yaptınız! Hesabınız geçici olarak kilitlenmiştir. Lütfen {minutes} dakika {seconds} saniye sonra tekrar deneyin."
+        )
+
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
     cursor.execute(
         '''SELECT * FROM users 
-           WHERE (LOWER(TRIM(username)) = LOWER(?) 
-                  OR LOWER(TRIM(email)) = LOWER(?) 
-                  OR REPLACE(phone, ' ', '') = ? 
-                  OR LOWER(TRIM(full_name)) = LOWER(?)) 
-             AND password = ?''', 
-        (identifier, identifier, clean_phone, identifier, credentials.password)
+           WHERE LOWER(TRIM(username)) = LOWER(?) 
+              OR LOWER(TRIM(email)) = LOWER(?) 
+              OR REPLACE(phone, ' ', '') = ? 
+              OR LOWER(TRIM(full_name)) = LOWER(?)''', 
+        (identifier, identifier, clean_phone, identifier)
     )
     user = cursor.fetchone()
     conn.close()
     
+    # Helper to handle failed attempts
+    def handle_failed_attempt():
+        if attempt_key in login_attempts:
+            login_attempts[attempt_key]["attempts"] += 1
+        else:
+            login_attempts[attempt_key] = {"attempts": 1, "lock_until": 0.0}
+            
+        current_attempts = login_attempts[attempt_key]["attempts"]
+        if current_attempts >= 10:
+            login_attempts[attempt_key]["lock_until"] = now + 900  # 15 dakika kilit
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Çok fazla hatalı giriş! Giriş denemeleriniz 15 dakika süreyle bloke edilmiştir."
+            )
+            
+        remaining = 10 - current_attempts
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail=f"Hatalı kullanıcı bilgisi veya şifre! (Kalan deneme hakkı: {remaining})"
+        )
+
     if not user:
-        raise HTTPException(status_code=401, detail="Hatalı kullanıcı bilgisi veya şifre!")
-    
+        handle_failed_attempt()
+        
     user_dict = dict(user)
+    if not verify_password(user_dict["password"], credentials.password):
+        handle_failed_attempt()
+        
+    # Başarılı girişte deneme sayacını sıfırla
+    if attempt_key in login_attempts:
+        login_attempts[attempt_key] = {"attempts": 0, "lock_until": 0.0}
     
+
     # ONAY DURUM KONTROLÜ
     if user_dict["status"] == "pending":
         raise HTTPException(status_code=403, detail="Hesabınız henüz Admin tarafından onaylanmadı! Lütfen bekleyin.")
@@ -439,7 +529,7 @@ async def disable_2fa(req: Disable2FARequest):
     cursor.execute("SELECT id, password, role FROM users WHERE username = ?", (req.username,))
     user = cursor.fetchone()
     
-    if not user or user["password"] != req.password:
+    if not user or not verify_password(user["password"], req.password):
         conn.close()
         raise HTTPException(status_code=400, detail="Doğrulama başarısız! Şifreniz hatalı.")
     
@@ -452,7 +542,7 @@ async def disable_2fa(req: Disable2FARequest):
 
 # --- 4. ADMİN İÇİN ONAY BEKLEYEN KULLANICILARI LİSTELEME ---
 @app.get("/api/admin/pending-users")
-async def get_pending_users():
+async def get_pending_users(admin: dict = Depends(get_current_admin)):
     conn = database.get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT id, username, full_name, email, phone, role, status, email_verified, phone_verified, is_2fa_enabled, created_at FROM users WHERE status = 'pending'")
@@ -463,7 +553,7 @@ async def get_pending_users():
 
 # --- 5. ADMİN İÇİN KULLANICI ONAYLAMA / REDDETME (SİLME DESTEKLİ) ---
 @app.post("/api/admin/approve-user")
-async def approve_or_reject_user(req: UserApprovalRequest):
+async def approve_or_reject_user(req: UserApprovalRequest, admin: dict = Depends(get_current_admin)):
     if req.action not in ["approve", "reject"]:
         raise HTTPException(status_code=400, detail="Geçersiz işlem! 'approve' veya 'reject' olmalı.")
         
@@ -485,7 +575,7 @@ async def approve_or_reject_user(req: UserApprovalRequest):
 
 # --- 6. ARAYÜZ İÇİN İSTASYON LİSTESİ ---
 @app.get("/api/stations")
-async def get_stations():
+async def get_stations(user: dict = Depends(get_current_user)):
     conn = database.get_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
@@ -500,7 +590,7 @@ async def get_stations():
 
 # --- 6.1 ARAYÜZ İÇİN KATEGORİ LİSTESİ ---
 @app.get("/api/station-categories")
-async def get_station_categories():
+async def get_station_categories(user: dict = Depends(get_current_user)):
     conn = database.get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT id, name FROM station_categories ORDER BY id ASC")
@@ -510,7 +600,7 @@ async def get_station_categories():
 
 
 @app.get("/api/stations/{station_id}/sensors")
-async def get_station_sensors(station_id: int):
+async def get_station_sensors(station_id: int, user: dict = Depends(get_current_user)):
     conn = database.get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM sensors WHERE station_id = ? ORDER BY sequence_number ASC", (station_id,))
@@ -521,7 +611,7 @@ async def get_station_sensors(station_id: int):
 
 # --- 7. ARAYÜZ İÇİN GRAFİK VERİSİ ---
 @app.get("/api/sensor/history")
-async def get_sensor_history(station_id: int = 1, limit: int = 50):
+async def get_sensor_history(station_id: int = 1, limit: int = 50, user: dict = Depends(get_current_user)):
     conn = database.get_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
@@ -536,7 +626,7 @@ async def get_sensor_history(station_id: int = 1, limit: int = 50):
 
 # --- 8. YENİ İSTASYON VE VARSAYILAN SENSÖRLERİNİ EKLEME ---
 @app.post("/api/stations")
-async def create_station(station: StationCreateRequest):
+async def create_station(station: StationCreateRequest, admin: dict = Depends(get_current_admin)):
     conn = database.get_db_connection()
     cursor = conn.cursor()
     
@@ -598,7 +688,7 @@ async def create_station(station: StationCreateRequest):
 
 # --- 9. İSTASYONA YENİ SENSÖR EKLEME ---
 @app.post("/api/sensors")
-async def create_sensor(sensor: SensorCreateRequest):
+async def create_sensor(sensor: SensorCreateRequest, admin: dict = Depends(get_current_admin)):
     conn = database.get_db_connection()
     cursor = conn.cursor()
     

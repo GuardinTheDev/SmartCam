@@ -10,6 +10,15 @@ from datetime import datetime, time
 # ---------------------------------------------------------
 API_BASE_URL = "http://127.0.0.1:8000/api"
 
+def get_auth_headers():
+    token = st.session_state.get("session_token")
+    if not token:
+        # Query params'tan çekmeyi de dene
+        token = st.query_params.get("session_token", "")
+    if token:
+        return {"Authorization": f"Bearer {token}"}
+    return {}
+
 st.set_page_config(
     page_title="SmartCam IoT - Telemetri Paneli",
     page_icon="📡",
@@ -635,7 +644,7 @@ def render_admin_management_center(stations):
         # --- KULLANICI ONAYLARI ---
         with tab_users:
             try:
-                res = requests.get(f"{API_BASE_URL}/admin/pending-users", timeout=5)
+                res = requests.get(f"{API_BASE_URL}/admin/pending-users", headers=get_auth_headers(), timeout=5)
                 if res.status_code == 200:
                     pending_users = res.json()
                     if not pending_users:
@@ -650,7 +659,7 @@ def render_admin_management_center(stations):
                             em_ver = "✅ E-Posta Onaylı" if user.get("email_verified") else "❌ E-Posta Onaysız"
                             ph_ver = "✅ Telefon Onaylı" if user.get("phone_verified") else "❌ Telefon Onaysız"
                             fa_ver = "🔒 2FA Aktif" if user.get("is_2fa_enabled") else "🔓 2FA Pasif"
-
+ 
                             col_u1, col_u2, col_u3 = st.columns([3, 1, 1])
                             with col_u1:
                                 st.markdown(f"**👤 {u_name}** ({full_name}) `ID: {u_id}`")
@@ -659,7 +668,8 @@ def render_admin_management_center(stations):
                                 if st.button("✅ Onayla", key=f"app_{u_id}", use_container_width=True):
                                     requests.post(
                                         f"{API_BASE_URL}/admin/approve-user",
-                                        json={"user_id": u_id, "action": "approve"}
+                                        json={"user_id": u_id, "action": "approve"},
+                                        headers=get_auth_headers()
                                     )
                                     st.toast(f"{u_name} onaylandı!", icon="✅")
                                     st.rerun()
@@ -667,7 +677,8 @@ def render_admin_management_center(stations):
                                 if st.button("❌ Reddet", key=f"rej_{u_id}", use_container_width=True):
                                     requests.post(
                                         f"{API_BASE_URL}/admin/approve-user",
-                                        json={"user_id": u_id, "action": "reject"}
+                                        json={"user_id": u_id, "action": "reject"},
+                                        headers=get_auth_headers()
                                     )
                                     st.toast(f"{u_name} reddedildi!", icon="❌")
                                     st.rerun()
@@ -679,7 +690,7 @@ def render_admin_management_center(stations):
         with tab_add_station:
             # İstasyon kategorilerini API'den çekelim
             try:
-                res_cat = requests.get(f"{API_BASE_URL}/station-categories", timeout=5)
+                res_cat = requests.get(f"{API_BASE_URL}/station-categories", headers=get_auth_headers(), timeout=5)
                 categories = res_cat.json() if res_cat.status_code == 200 else []
             except Exception:
                 categories = []
@@ -716,7 +727,7 @@ def render_admin_management_center(stations):
                                 "phone_number": st_phone.strip(),
                                 "device_type": st_device_type
                             }
-                            res = requests.post(f"{API_BASE_URL}/stations", json=payload, timeout=5)
+                            res = requests.post(f"{API_BASE_URL}/stations", json=payload, headers=get_auth_headers(), timeout=5)
                             if res.status_code == 200:
                                 data = res.json()
                                 st.success(f"✅ {data['message']}")
@@ -767,7 +778,7 @@ def render_admin_management_center(stations):
                                     "default_unit": sn_unit.strip(),
                                     "default_value": float(sn_default_val)
                                 }
-                                res = requests.post(f"{API_BASE_URL}/sensors", json=payload, timeout=5)
+                                res = requests.post(f"{API_BASE_URL}/sensors", json=payload, headers=get_auth_headers(), timeout=5)
                                 if res.status_code == 200:
                                     data = res.json()
                                     st.success(f"✅ {data['message']}")
@@ -814,7 +825,7 @@ def render_live_chart_section(station_id, limit, station_name, sensor_obj):
 
         try:
             url = f"{API_BASE_URL}/sensor/history?station_id={station_id}&limit={limit}"
-            res_history = requests.get(url, timeout=5)
+            res_history = requests.get(url, headers=get_auth_headers(), timeout=5)
             sensor_logs = res_history.json() if res_history.status_code == 200 else []
         except Exception:
             sensor_logs = []
@@ -1035,7 +1046,7 @@ def render_dashboard():
 
     # API'den İstasyon Listesini Çek (/api/stations)
     try:
-        res_stations = requests.get(f"{API_BASE_URL}/stations", timeout=5)
+        res_stations = requests.get(f"{API_BASE_URL}/stations", headers=get_auth_headers(), timeout=5)
         stations = res_stations.json() if res_stations.status_code == 200 else []
     except Exception as e:
         st.error(f"API sunucusuna bağlanılamadı ({API_BASE_URL}): {e}")
@@ -1099,7 +1110,7 @@ def render_dashboard():
 
     # API'den Bu İstasyona Ait Sensörleri Çek (/api/stations/{station_id}/sensors)
     try:
-        res_sensors = requests.get(f"{API_BASE_URL}/stations/{station_id}/sensors", timeout=5)
+        res_sensors = requests.get(f"{API_BASE_URL}/stations/{station_id}/sensors", headers=get_auth_headers(), timeout=5)
         station_sensors = res_sensors.json() if res_sensors.status_code == 200 else []
     except Exception:
         station_sensors = []

@@ -50,19 +50,19 @@ def main():
 
     processes = []
     try:
-        # 1. FastAPI Backend
+        # FastAPI Backend
         print("⚡ [1/3] FastAPI Backend başlatılıyor (Port 8000)...")
         p_backend = subprocess.Popen([python_bin, "main.py"])
         processes.append(p_backend)
         time.sleep(2)
 
-        # 2. Streamlit Frontend (headless=true ile localhost sekmesi engellenir)
+        # Streamlit Frontend (headless=true ile localhost sekmesi engellenir)
         print("💻 [2/3] Streamlit Dashboard başlatılıyor (Port 8501)...")
         p_frontend = subprocess.Popen([streamlit_bin, "run", "app.py", "--server.port", "8501", "--server.headless", "true"])
         processes.append(p_frontend)
         time.sleep(2)
 
-        # 3. Ngrok Tüneli ve Otomatik Tarayıcı Açımı
+        # Ngrok Tüneli ve Otomatik Tarayıcı Açımı
         print("🌍 [3/3] Ngrok Canlı Yayın Tüneli başlatılıyor...")
         try:
             p_ngrok = subprocess.Popen([ngrok_bin, "http", "8501"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
