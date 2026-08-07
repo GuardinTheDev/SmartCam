@@ -616,7 +616,8 @@ def render_auth_page():
                             elif res.status_code == 403:
                                 st.error("❌ Hesabınız henüz yönetici tarafından onaylanmamış.")
                             else:
-                                st.error("❌ Hatalı kullanıcı adı veya şifre!")
+                                err_detail = res.json().get("detail", "Hatalı kullanıcı adı veya şifre!")
+                                st.error(f"❌ {err_detail}")
                         except requests.exceptions.ConnectionError:
                             st.error("❌ API sunucusuna bağlanılamadı! Lütfen backend'in çalıştığından emin olun.")
                         except Exception as e:
