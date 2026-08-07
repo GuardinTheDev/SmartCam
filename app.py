@@ -6,7 +6,7 @@ import time as pytime
 from datetime import datetime, time
 
 # ---------------------------------------------------------
-# 1. SUNUCU ADRESİ VE SAYFA YAPILANDIRMASI
+# SUNUCU ADRESİ VE SAYFA YAPILANDIRMASI
 # ---------------------------------------------------------
 API_BASE_URL = "http://127.0.0.1:8000/api"
 
@@ -31,7 +31,7 @@ if "session_token" not in st.session_state:
 
 
 # ---------------------------------------------------------
-# 1.1 ÖZEL TASARIM (CSS)
+# ÖZEL TASARIM (CSS)
 # ---------------------------------------------------------
 def inject_custom_css():
     st.markdown("""
@@ -180,7 +180,7 @@ def inject_custom_css():
             -webkit-box-shadow: 0 0 0px 1000px #1e293b inset !important;
             transition: background-color 5000s ease-in-out 0s;
         }
-
+şuan smartcamfix kontrol eder misin
         /* ---- Bilgi/uyarı kutuları ---- */
         div[data-testid="stAlert"] {
             border-radius: 12px;
@@ -219,7 +219,7 @@ def inject_custom_css():
 
 
 # ---------------------------------------------------------
-# 2. YARDIMCI FONKSİYONLAR
+# YARDIMCI FONKSİYONLAR
 # ---------------------------------------------------------
 def parse_percentage(val):
     """Metin veya sayı olarak gelen yüzdeyi sayıya çevirir."""
@@ -300,7 +300,7 @@ def check_persistent_session():
     if "role" not in st.session_state:
         st.session_state.role = None
 
-    # 1. Query Params üzerinden oturum kontrolü (F5 yenilemelerinde otomatik koruma)
+    # Query Params üzerinden oturum kontrolü (F5 yenilemelerinde otomatik koruma)
     if not st.session_state.authenticated:
         q_user = st.query_params.get("session_user")
         q_role = st.query_params.get("session_role")
@@ -322,7 +322,7 @@ def check_persistent_session():
             except Exception:
                 st.query_params.clear()
 
-    # 2. Browser LocalStorage ile otomatik senkronizasyon JS
+    # Browser LocalStorage ile otomatik senkronizasyon JS
     st.components.v1.html("""
         <script>
         (function() {
@@ -352,7 +352,7 @@ def check_persistent_session():
 
 
 # ---------------------------------------------------------
-# 3. GİRİŞ VE KAYIT EKRANI
+# GİRİŞ VE KAYIT EKRANI
 # ---------------------------------------------------------
 def render_auth_page():
     # Klavye Yönlendirme Javascript Kodu (Enter veya Alt Ok tuşuna basınca şifre kutusuna geçer)
@@ -394,7 +394,7 @@ def render_auth_page():
             "</div>"
         )
 
-        # --- MODE 1: 2FA GİRİŞ DOĞRULAMA SAYFASI ---
+        # --- 2FA GİRİŞ DOĞRULAMA SAYFASI ---
         if current_mode == "2fa_verify":
             pending_user = st.session_state.get("pending_2fa_user", "")
             
@@ -467,7 +467,7 @@ def render_auth_page():
                 st.session_state.auth_mode = "login"
                 st.rerun()
 
-        # --- MODE 2: SADECE KAYIT OL SAYFASI (GİRİŞ EKRANINDAN AYRILDI) ---
+        # --- SADECE KAYIT OL SAYFASI (GİRİŞ EKRANINDAN AYRILDI) ---
         elif current_mode == "register":
             with st.form("register_form", clear_on_submit=False):
                 st.markdown(header_html, unsafe_allow_html=True)
@@ -540,7 +540,7 @@ def render_auth_page():
                 st.session_state.auth_mode = "login"
                 st.rerun()
 
-        # --- MODE 3: GİRİŞ YAP SAYFASI (VARSAYILAN GİRİŞ EKRANI) ---
+        # --- GİRİŞ YAP SAYFASI (VARSAYILAN GİRİŞ EKRANI) ---
         else:
             with st.form("login_form", clear_on_submit=False):
                 st.markdown(header_html, unsafe_allow_html=True)
@@ -621,7 +621,7 @@ def render_auth_page():
 
 
 # ---------------------------------------------------------
-# 4. ADMİN İÇİN YÖNETİM MERKEZİ (İSTASYON & SENSÖR EKLEME)
+# ADMİN İÇİN YÖNETİM MERKEZİ (İSTASYON & SENSÖR EKLEME)
 # ---------------------------------------------------------
 def render_admin_management_center(stations):
     """Admin kullanıcıları için İstasyon Ekleme, Sensör Ekleme ve Kullanıcı Onaylama Paneli."""
@@ -632,7 +632,7 @@ def render_admin_management_center(stations):
             "🌡️ Yeni Sensör Ekle"
         ])
 
-        # --- 4.1. KULLANICI ONAYLARI ---
+        # --- KULLANICI ONAYLARI ---
         with tab_users:
             try:
                 res = requests.get(f"{API_BASE_URL}/admin/pending-users", timeout=5)
@@ -675,7 +675,7 @@ def render_admin_management_center(stations):
             except Exception:
                 st.error("Kullanıcı listesi alınırken API sunucusuna bağlanılamadı.")
 
-        # --- 4.2. YENİ İSTASYON EKLE ---
+        # --- YENİ İSTASYON EKLE ---
         with tab_add_station:
             # İstasyon kategorilerini API'den çekelim
             try:
@@ -731,7 +731,7 @@ def render_admin_management_center(stations):
                         except Exception as e:
                             st.error(f"İstasyon eklenirken sunucu hatası oluştu: {e}")
 
-        # --- 4.3. YENİ SENSÖR EKLE ---
+        # --- YENİ SENSÖR EKLE ---
         with tab_add_sensor:
             if not stations:
                 st.warning("Önce sistemde en az bir istasyon tanımlı olmalıdır.")
@@ -780,7 +780,7 @@ def render_admin_management_center(stations):
 
 
 # ---------------------------------------------------------
-# 4.4 CANLI GRAFİK VE SENSÖR DETAY ALANI
+# CANLI GRAFİK VE SENSÖR DETAY ALANI
 # ---------------------------------------------------------
 def render_live_chart_section(station_id, limit, station_name, sensor_obj):
     """Seçilen sensörün metriklerini ve zaman serisi çizim grafiğini gösterir."""
@@ -899,7 +899,7 @@ def render_live_chart_section(station_id, limit, station_name, sensor_obj):
 
 
 # ---------------------------------------------------------
-# 5. ANA KONTROL PANELİ & KADEMELİ İSTASYON/SENSÖR SEÇİMİ
+# ANA KONTROL PANELİ & KADEMELİ İSTASYON/SENSÖR SEÇİMİ
 # ---------------------------------------------------------
 def render_dashboard():
     # TEK AKTİF OTURUM KONTROLÜ (SINGLE SESSION VALIDATION)
@@ -1060,7 +1060,7 @@ def render_dashboard():
         st.warning("Veritabanında kayıtlı istasyon bulunamadı. Lütfen backend'i çalıştırdığınızdan veya yukarıdaki Admin Merkezinden bir istasyon eklediğinizden emin olun.")
         return
 
-    # --- 1. ADIM: İSTASYON SEÇİMİ ---
+    # --- İSTASYON SEÇİMİ ---
     st.markdown("### 1️⃣ Adım: İstasyon Seçiniz")
     station_options = ["-- Lütfen Bir İstasyon Seçiniz --"] + [f"{s['name']} (ID: {s['id']})" for s in stations]
     station_map = {f"{s['name']} (ID: {s['id']})": s for s in stations}
@@ -1093,7 +1093,7 @@ def render_dashboard():
     m2.metric("📶 GSM Sinyali", get_status_indicator(gsm_val))
     m3.metric("🖥️ Cihaz Tipi", selected_station.get("device_type", "Gateway"))
 
-    # --- 2. ADIM: SENSÖR SEÇİMİ (İSTASYON SEÇİLİNCE GELİR) ---
+    # --- SENSÖR SEÇİMİ (İSTASYON SEÇİLİNCE GELİR) ---
     st.markdown("---")
     st.markdown("### 2️⃣ Adım: Sensör Seçiniz")
 
@@ -1129,7 +1129,7 @@ def render_dashboard():
 
 
 # ---------------------------------------------------------
-# 6. UYGULAMA BAŞLATICI
+# UYGULAMA BAŞLATICI
 # ---------------------------------------------------------
 def main():
     inject_custom_css()
