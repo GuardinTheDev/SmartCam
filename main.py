@@ -218,17 +218,38 @@ async def register_user(credentials: RegisterRequest):
     conn = database.get_db_connection()
     cursor = conn.cursor()
     
-    # 3. Önce bu kullanıcı adı daha önce alınmış mı bakalım
-    cursor.execute("SELECT id, status FROM users WHERE username = ?", (credentials.username,))
-    existing_user = cursor.fetchone()
+    # 1. 15 dakikayı aşmış ve hiç doğrulanmamış (pending) eski kayıtları temizle
+    cursor.execute('''
+        DELETE FROM users 
+        WHERE status = 'pending' 
+          AND email_verified = 0 
+          AND phone_verified = 0 
+          AND datetime(created_at) < datetime('now', '-15 minutes')
+    ''')
     
-    if existing_user:
-        user_dict = dict(existing_user)
-        if user_dict["status"] == "rejected":
-            cursor.execute("DELETE FROM users WHERE id = ?", (user_dict["id"],))
-        else:
-            conn.close()
-            raise HTTPException(status_code=400, detail="Bu kullanıcı adı zaten alınmış veya onay bekliyor!")
+    # 2. Aktif/Onaylı/Doğrulanmış kayıtlarla çakışma var mı?
+    cursor.execute('''
+        SELECT id FROM users 
+        WHERE (status = 'approved' OR email_verified = 1 OR phone_verified = 1)
+          AND (LOWER(username) = LOWER(?) OR LOWER(email) = LOWER(?) OR phone = ?)
+    ''', (credentials.username.strip(), credentials.email.strip(), credentials.phone.strip()))
+    
+    active_conflict = cursor.fetchone()
+    if active_conflict:
+        conn.close()
+        raise HTTPException(
+            status_code=400, 
+            detail="Bu kullanıcı adı, e-posta veya telefon numarası zaten kullanımda!"
+        )
+        
+    # 3. Henüz doğrulanmamış (pending) ve süresi dolmamış çakışan eski kaydı sil (yeniden denemeyi kolaylaştırmak için)
+    cursor.execute('''
+        DELETE FROM users 
+        WHERE status = 'pending' 
+          AND email_verified = 0 
+          AND phone_verified = 0
+          AND (LOWER(username) = LOWER(?) OR LOWER(email) = LOWER(?) OR phone = ?)
+    ''', (credentials.username.strip(), credentials.email.strip(), credentials.phone.strip()))
             
     try:
         email_otp = str(random.randint(100000, 999999))
@@ -237,14 +258,14 @@ async def register_user(credentials: RegisterRequest):
 
         cursor.execute(
             '''INSERT INTO users 
-               (username, password, full_name, email, phone, kvkk_approved, role, status, email_otp, phone_otp, email_verified, phone_verified) 
-               VALUES (?, ?, ?, ?, ?, ?, 'user', 'pending', ?, ?, 0, 0)''', 
+               (username, password, full_name, email, phone, kvkk_approved, role, status, email_otp, phone_otp, email_verified, phone_verified, created_at) 
+               VALUES (?, ?, ?, ?, ?, ?, 'user', 'pending', ?, ?, 0, 0, datetime('now'))''', 
             (
-                credentials.username, 
+                credentials.username.strip(), 
                 hashed_pw, 
-                credentials.full_name, 
-                credentials.email, 
-                credentials.phone, 
+                credentials.full_name.strip(), 
+                credentials.email.strip(), 
+                credentials.phone.strip(), 
                 1 if credentials.kvkk_approved else 0,
                 email_otp,
                 phone_otp
@@ -254,7 +275,7 @@ async def register_user(credentials: RegisterRequest):
         conn.close()
         return {
             "status": "success", 
-            "message": f"Kayıt isteğiniz alındı! '{credentials.username}' ({credentials.full_name}) kullanıcısı Admin onayı bekliyor.",
+            "message": "Kayıt işlemini tamamlamak için lütfen doğrulama kodunu giriniz (Süre: 15 dakika).",
             "email_otp_demo": email_otp,
             "phone_otp_demo": phone_otp
         }
@@ -296,6 +317,16 @@ async def verify_otp(req: VerifyOTPRequest):
     conn = database.get_db_connection()
     cursor = conn.cursor()
     
+    # 1. 15 dakikayı geçmiş onaylanmamış kayıtları temizle
+    cursor.execute('''
+        DELETE FROM users 
+        WHERE status = 'pending' 
+          AND email_verified = 0 
+          AND phone_verified = 0 
+          AND datetime(created_at) < datetime('now', '-15 minutes')
+    ''')
+    conn.commit()
+    
     col_otp = "email_otp" if req.channel == "email" else "phone_otp"
     col_ver = "email_verified" if req.channel == "email" else "phone_verified"
     
@@ -304,16 +335,20 @@ async def verify_otp(req: VerifyOTPRequest):
     
     if not user:
         conn.close()
-        raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı!")
+        raise HTTPException(
+            status_code=404, 
+            detail="Kullanıcı bulunamadı veya doğrulama süresi (15 dakika) doldu!"
+        )
         
     saved_otp = user[col_otp]
     if saved_otp and saved_otp.strip() == req.code.strip():
-        cursor.execute(f"UPDATE users SET {col_ver} = 1 WHERE id = ?", (user["id"],))
+        # Doğrulama başarılı olunca hesabı approved (aktif) yap
+        cursor.execute(f"UPDATE users SET {col_ver} = 1, status = 'approved' WHERE id = ?", (user["id"],))
         conn.commit()
         conn.close()
         return {
             "status": "success",
-            "message": f"✅ {'E-Posta' if req.channel == 'email' else 'Telefon'} başarıyla doğrulandı!"
+            "message": f"✅ {'E-Posta' if req.channel == 'email' else 'Telefon'} başarıyla doğrulandı! Hesabınız aktifleştirildi."
         }
     else:
         conn.close()
@@ -346,6 +381,17 @@ async def login(credentials: LoginRequest):
 
     conn = database.get_db_connection()
     cursor = conn.cursor()
+    
+    # 1.1 15 dakikayı geçmiş onaylanmamış kayıtları temizle
+    cursor.execute('''
+        DELETE FROM users 
+        WHERE status = 'pending' 
+          AND email_verified = 0 
+          AND phone_verified = 0 
+          AND datetime(created_at) < datetime('now', '-15 minutes')
+    ''')
+    conn.commit()
+
     cursor.execute(
         '''SELECT * FROM users 
            WHERE LOWER(TRIM(username)) = LOWER(?) 

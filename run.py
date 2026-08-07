@@ -25,10 +25,27 @@ def main():
     print("🚀 SmartCam IoT Platformu (Fix) — Tek Komut Başlatıcı")
     print("=================================================")
 
-    # Çevre değişkenlerinin çakışmasını önle
-    os.environ.pop("VIRTUAL_ENV", None)
-    os.environ.pop("PYTHONPATH", None)
-    os.environ.pop("PYTHONHOME", None)
+    # Sanal ortam site-packages klasörünü bul ve PYTHONPATH'e ekle
+    env = os.environ.copy()
+    env.pop("PYTHONHOME", None)
+    
+    venv_site_packages = None
+    lib_dir = os.path.join(BASE_DIR, "venv", "lib")
+    if os.path.exists(lib_dir):
+        for item in os.listdir(lib_dir):
+            if item.startswith("python"):
+                sp = os.path.join(lib_dir, item, "site-packages")
+                if os.path.exists(sp):
+                    venv_site_packages = sp
+                    break
+
+    if venv_site_packages:
+        existing_pythonpath = env.get("PYTHONPATH", "")
+        if existing_pythonpath:
+            env["PYTHONPATH"] = f"{venv_site_packages}:{existing_pythonpath}"
+        else:
+            env["PYTHONPATH"] = venv_site_packages
+        env["VIRTUAL_ENV"] = os.path.join(BASE_DIR, "venv")
 
     venv_python = os.path.join(BASE_DIR, "venv", "bin", "python")
     venv_streamlit = os.path.join(BASE_DIR, "venv", "bin", "streamlit")
@@ -52,13 +69,13 @@ def main():
     try:
         # FastAPI Backend
         print("⚡ [1/3] FastAPI Backend başlatılıyor (Port 8000)...")
-        p_backend = subprocess.Popen([python_bin, "main.py"])
+        p_backend = subprocess.Popen([python_bin, "main.py"], env=env)
         processes.append(p_backend)
         time.sleep(2)
 
         # Streamlit Frontend (headless=true ile localhost sekmesi engellenir)
         print("💻 [2/3] Streamlit Dashboard başlatılıyor (Port 8501)...")
-        p_frontend = subprocess.Popen([streamlit_bin, "run", "app.py", "--server.port", "8501", "--server.headless", "true"])
+        p_frontend = subprocess.Popen([streamlit_bin, "run", "app.py", "--server.port", "8501", "--server.headless", "true"], env=env)
         processes.append(p_frontend)
         time.sleep(2)
 

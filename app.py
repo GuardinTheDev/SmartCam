@@ -476,6 +476,68 @@ def render_auth_page():
                 st.session_state.auth_mode = "login"
                 st.rerun()
 
+        # --- YENİ KAYIT DOĞRULAMA SAYFASI ---
+        elif current_mode == "register_verify":
+            verify_user = st.session_state.get("verify_username", "")
+            email_otp_demo = st.session_state.get("verify_email_otp_demo", "")
+            phone_otp_demo = st.session_state.get("verify_phone_otp_demo", "")
+            
+            with st.form("register_verify_form", clear_on_submit=False):
+                st.markdown(header_html, unsafe_allow_html=True)
+                st.subheader("📱 Hesap Aktivasyonu ve Doğrulama")
+                st.markdown(
+                    f"**Sayın Kullanıcı ({verify_user})**, kaydınızı tamamlamak için **15 dakika** içinde doğrulama yapmanız gerekmektedir. "
+                    f"Aksi takdirde kayıt bilgileriniz silinecektir."
+                )
+                
+                channel = st.radio("Doğrulama Kanalı Seçin:", ["E-Posta", "Telefon"])
+                channel_key = "email" if channel == "E-Posta" else "phone"
+                
+                demo_code = email_otp_demo if channel_key == "email" else phone_otp_demo
+                st.info(
+                    f"ℹ️ **Demo/Simülasyon Doğrulama Kodu:**\n"
+                    f"Seçilen kanala ({channel}) gönderilen 6 haneli kod: `{demo_code}`"
+                )
+                
+                code_input = st.text_input("6 Haneli Doğrulama Kodu", placeholder="123456", max_chars=6)
+                
+                verify_submitted = st.form_submit_button("Doğrula ve Hesabı Aktifleştir", type="primary")
+                
+                if verify_submitted:
+                    if not code_input or len(code_input.strip()) != 6:
+                        st.warning("⚠️ Lütfen 6 haneli kodu eksiksiz giriniz.")
+                    else:
+                        try:
+                            res = requests.post(
+                                f"{API_BASE_URL}/auth/verify-otp",
+                                json={
+                                    "username": verify_user,
+                                    "channel": channel_key,
+                                    "code": code_input.strip()
+                                },
+                                timeout=5
+                            )
+                            if res.status_code == 200:
+                                st.success("✅ Hesabınız başarıyla aktifleştirildi! Giriş yapabilirsiniz.")
+                                st.session_state.auth_mode = "login"
+                                st.session_state.verify_username = None
+                                st.session_state.verify_email_otp_demo = None
+                                st.session_state.verify_phone_otp_demo = None
+                                st.rerun()
+                            else:
+                                err_msg = res.json().get("detail", "Doğrulama başarısız.")
+                                st.error(f"❌ {err_msg}")
+                        except Exception as e:
+                            st.error(f"Doğrulama sırasında hata oluştu: {e}")
+            
+            st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+            if st.button("⬅️ İptal Et ve Giriş Ekranına Dön", use_container_width=True):
+                st.session_state.auth_mode = "login"
+                st.session_state.verify_username = None
+                st.session_state.verify_email_otp_demo = None
+                st.session_state.verify_phone_otp_demo = None
+                st.rerun()
+
         # --- SADECE KAYIT OL SAYFASI (GİRİŞ EKRANINDAN AYRILDI) ---
         elif current_mode == "register":
             with st.form("register_form", clear_on_submit=False):
@@ -528,14 +590,11 @@ def render_auth_page():
                             )
                             if res.status_code in [200, 201]:
                                 data = res.json()
-                                st.success("✅ Kayıt başvurunuz alındı! Hesabınız Admin onayına gönderildi.")
-                                if data.get("email_otp_demo") and data.get("phone_otp_demo"):
-                                    st.info(
-                                        f"📱 **Test / Demo Doğrulama Kodlarınız:**\n"
-                                        f"- E-Posta Onay Kodu: `{data.get('email_otp_demo')}`\n"
-                                        f"- Telefon Onay Kodu: `{data.get('phone_otp_demo')}`\n"
-                                        f"*(Giriş yaptıktan sonra profil ayarlarınızdan kodları doğrulayabilirsiniz)*"
-                                    )
+                                st.session_state.verify_username = reg_user
+                                st.session_state.verify_email_otp_demo = data.get("email_otp_demo", "")
+                                st.session_state.verify_phone_otp_demo = data.get("phone_otp_demo", "")
+                                st.session_state.auth_mode = "register_verify"
+                                st.rerun()
                             else:
                                 err_msg = res.json().get("detail", "Kayıt oluşturulamadı.")
                                 st.error(f"❌ {err_msg}")
